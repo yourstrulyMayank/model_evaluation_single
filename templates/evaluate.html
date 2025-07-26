@@ -1,0 +1,7 @@
+{% extends "index.html" %}
+{% block content %}
+    <h2>Evaluating {{ model_name }}</h2>
+    <p>This may take a few moments...</p>
+    <img src="/static/loading.gif" alt="Loading..." />
+    <p><a href="{{ url_for('history', model_name=model_name) }}">Refresh to see results</a></p>
+{% endblock %}

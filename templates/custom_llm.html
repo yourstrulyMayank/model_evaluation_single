@@ -1,0 +1,893 @@
+<!-- custom_llm.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Evaluation - {{ model_name }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #f4f4f4;
+        }
+
+        header img {
+            height: 75px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            position: relative;
+        }
+
+        .card {
+            background-color: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #0071e3;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #005bb5;
+            border-bottom: 2px solid #0071e3;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        .eval-section {
+            text-align: center;
+            padding: 30px;
+            background: linear-gradient(135deg, #f8f9ff 0%, #e8f2ff 100%);
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #e3f2fd;
+        }
+
+        .eval-btn {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            font-size: 18px;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+        }
+
+        .eval-btn:hover:not(:disabled) {
+            background: linear-gradient(135deg, #218838, #1aa085);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+        }
+
+        .eval-btn:disabled {
+            background: linear-gradient(135deg, #6c757d, #5a6268);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Enhanced Status Section */
+        .status-section {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
+            border-radius: 15px;
+            border: 2px solid #007acc;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .status-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        .spinner {
+            border: 4px solid #e3f2fd;
+            border-top: 4px solid #007acc;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+            box-shadow: 0 4px 15px rgba(0, 122, 204, 0.2);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status-text {
+            font-size: 20px;
+            font-weight: 600;
+            color: #007acc;
+            margin-bottom: 15px;
+            text-shadow: 0 1px 3px rgba(0, 122, 204, 0.1);
+        }
+
+        .status-detail {
+            font-size: 16px;
+            color: #0056b3;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        /* Progress Stages */
+        .progress-stages {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 30px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .download-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+        }
+
+        .download-section h3 {
+            margin-top: 0;
+            color: #28a745;
+        }
+
+        .download-btn {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: background-color 0.3s;
+        }
+
+        .download-btn:hover {
+            background: #218838;
+            color: white;
+            text-decoration: none;
+        }
+
+        .stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            min-width: 120px;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .stage.active {
+            background: linear-gradient(135deg, #007acc, #0056b3);
+            color: white;
+            border-color: #004080;
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(0, 122, 204, 0.3);
+        }
+
+        .stage.completed {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            border-color: #1e7e34;
+        }
+
+        .stage-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .stage-text {
+            font-size: 12px;
+            font-weight: 500;
+            text-align: center;
+            line-height: 1.3;
+        }
+        /* Redo Button Styles */
+        .redo-section {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ffc107;
+        }
+
+        .redo-btn {
+            background: linear-gradient(135deg, #ffb200, #ffb300);
+            color: #212529;
+            font-size: 16px;
+            font-weight: 600;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255, 193, 7, 0.3);
+        }
+
+        .redo-btn:hover:not(:disabled) {
+            background: linear-gradient(135deg, #ffb300, #ff8f00);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 193, 7, 0.4);
+        }
+
+        .redo-btn:disabled {
+            background: linear-gradient(135deg, #6c757d, #5a6268);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            color: #fff;
+        }
+
+        .redo-note {
+            margin: 10px 0 0 0;
+            color: #856404;
+            font-size: 14px;
+            font-style: italic;
+        }
+
+        /* Back Button */
+        .back-button {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 120px;
+            height: 50px;
+            background: linear-gradient(135deg, #007acc, #0056b3);
+            color: white;
+            border: none;
+            border-radius: 25px; /* This makes it rounded rectangle */
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            box-shadow: 0 6px 20px rgba(0, 122, 204, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .back-button:hover {
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 8px 25px rgba(0, 122, 204, 0.5);
+            background: linear-gradient(135deg, #0056b3, #004080);
+        }
+
+        .back-button:active {
+            transform: translateY(-1px) scale(1.02);
+        }
+
+        .results-section {
+            display: none;
+        }
+        @media (max-width: 768px) {
+            .back-button {
+                bottom: 20px;
+                left: 20px;
+                width: 100px;
+                height: 45px;
+                font-size: 14px;
+                border-radius: 22px;
+            }
+        }
+        .summary-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .overall-score {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .score-label {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .metric-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #0071e3;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 14px;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .grade-distribution {
+            background-color: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .grade-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        .grade-pass {
+            background-color: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .grade-intermittent {
+            background-color: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+
+        .grade-fail {
+            background-color: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .alert-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .alert-danger {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .alert-info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        .completion-info {
+            background-color: #e8f5e8;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+            border-left: 4px solid #28a745;
+        }
+
+        .completion-info h3 {
+            margin-top: 0;
+            color: #155724;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background-color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        nav {
+            width: 100%;
+            text-align: left;
+            padding: 10px 20px;
+            background-color: #005bb5;
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+            margin-right: 20px;
+        }
+
+        nav a.greyed {
+            color: #ccc;
+            pointer-events: none;
+        }
+
+        nav a:hover:not(.greyed) {
+            background-color: #0071e3;
+        }
+
+        .info-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #0071e3;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .progress-stages {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .stage {
+                min-width: 200px;
+            }
+            
+            .back-button {
+                bottom: 20px;
+                left: 20px;
+                width: 50px;
+                height: 50px;
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <img src="/static/infosys.png" alt="Logo">
+        <h1>Custom Model Evaluation</h1>
+        <img src="/static/ABCBank.png" alt="Logo">
+    </header>
+    <nav>
+        <a href="/"></a>
+    </nav>
+    <!-- Enhanced Back Button -->
+    <a href="/" class="back-button" title="Back to Dashboard">
+        ←Back
+    </a>
+
+    <div class="container">
+        <div class="card">
+            <h1>Custom Evaluation for {{ model_name }}</h1>
+            {% if evaluation_results and not evaluation_results.get('error') %}
+                <div class="redo-section">
+                    <button class="redo-btn" id="redoEvalBtn" onclick="redoEvaluation()">
+                        🔄 Redo Evaluation
+                    </button>
+                    <p class="redo-note">Clear current results and run evaluation again</p>
+                </div>
+                {% endif %}
+            <!-- Evaluation Start Section -->
+            <div class="eval-section" id="eval-section">
+                <h2>Ready to Evaluate</h2>
+                <p>This evaluation will process files from the uploads folder and analyze the model's performance on document understanding and transaction analysis tasks.</p>
+                <button class="eval-btn" id="startEvalBtn" onclick="startCustomEvaluation()">
+                    Start Custom Evaluation
+                </button>
+            </div>
+
+            <!-- Enhanced Status Section -->
+            <div class="status-section" id="status-section">
+                <div class="spinner"></div>
+                <div class="status-text" id="status-text">Initializing evaluation...</div>
+                <div class="status-detail">Please wait while we process your files and run the evaluation.</div>
+                
+                <!-- Progress Stages -->
+                <div class="progress-stages">
+                    <div class="stage" id="stage-1">
+                        <div class="stage-icon">🔄</div>
+                        <div class="stage-text">Loading Models</div>
+                    </div>
+                    <div class="stage" id="stage-2">
+                        <div class="stage-icon">📄</div>
+                        <div class="stage-text">Processing Files</div>
+                    </div>
+                    <div class="stage" id="stage-3">
+                        <div class="stage-icon">🔍</div>
+                        <div class="stage-text">Analyzing Content</div>
+                    </div>
+                    <div class="stage" id="stage-4">
+                        <div class="stage-icon">📊</div>
+                        <div class="stage-text">Comparing Results</div>
+                    </div>
+                    <div class="stage" id="stage-5">
+                        <div class="stage-icon">✅</div>
+                        <div class="stage-text">Finalizing</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div class="results-section" id="results-section">
+                {% if evaluation_results %}
+                
+                {% if evaluation_results.get('error') %}
+                <div class="alert alert-danger">
+                    <strong>❌ Evaluation Error:</strong> {{ evaluation_results.error }}
+                </div>
+                {% else %}
+                
+                <!-- Overall Score Summary -->
+                {% if evaluation_results.get('overall_score') is not none %}
+                <div class="summary-card">
+                    <div class="overall-score">{{ "%.1f"|format(evaluation_results.overall_score) }}%</div>
+                    <div class="score-label">Overall Performance Score</div>
+                </div>
+                {% endif %}
+
+                <!-- Key Metrics -->
+                {% if evaluation_results.get('ground_truth_comparison') %}
+                {% set comparison = evaluation_results.ground_truth_comparison %}
+                {% set total_tests = comparison|length %}
+                {% set pass_count = comparison|selectattr('grade', 'equalto', '✅ Pass')|list|length %}
+                {% set intermittent_count = comparison|selectattr('grade', 'equalto', '⚠ Intermittent')|list|length %}
+                {% set fail_count = comparison|selectattr('grade', 'equalto', '❌ Fail')|list|length %}
+                {% set avg_score = (comparison|map(attribute='score')|sum / total_tests)|round(1) %}
+
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-value">{{ total_tests }}</div>
+                        <div class="metric-label">Total Tests</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value">{{ avg_score }}%</div>
+                        <div class="metric-label">Average Score</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value">{{ pass_count }}</div>
+                        <div class="metric-label">Tests Passed</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value">{{ "%.1f"|format((pass_count / total_tests * 100)) }}%</div>
+                        <div class="metric-label">Success Rate</div>
+                    </div>
+                </div>
+
+                <!-- Grade Distribution -->
+                <div class="grade-distribution">
+                    <h3>📊 Performance Breakdown</h3>
+                    <div class="grade-item grade-pass">
+                        <span>✅ Passed Tests</span>
+                        <span>{{ pass_count }} / {{ total_tests }} ({{ "%.1f"|format((pass_count / total_tests * 100)) }}%)</span>
+                    </div>
+                    <div class="grade-item grade-intermittent">
+                        <span>⚠️ Intermittent Tests</span>
+                        <span>{{ intermittent_count }} / {{ total_tests }} ({{ "%.1f"|format((intermittent_count / total_tests * 100)) }}%)</span>
+                    </div>
+                    <div class="grade-item grade-fail">
+                        <span>❌ Failed Tests</span>
+                        <span>{{ fail_count }} / {{ total_tests }} ({{ "%.1f"|format((fail_count / total_tests * 100)) }}%)</span>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Completion Information -->
+                <div class="completion-info">
+                    <h3>✅ Evaluation Complete</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-value">{{ evaluation_results.get('files_processed', 0) }}</div>
+                            <div class="info-label">Files Processed</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-value">{{ evaluation_results.get('timestamp', 'N/A') }}</div>
+                            <div class="info-label">Completed At</div>
+                        </div>
+                        {% if evaluation_results.get('document_analysis') %}
+                        <div class="info-item">
+                            <div class="info-value">{{ evaluation_results.document_analysis|length }}</div>
+                            <div class="info-label">Documents Analyzed</div>
+                        </div>
+                        {% endif %}
+                        {% if evaluation_results.get('transaction_analysis') %}
+                        <div class="info-item">
+                            <div class="info-value">{{ evaluation_results.transaction_analysis|length }}</div>
+                            <div class="info-label">Transaction Files</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Download Section -->
+                <div class="download-section">
+                    <h3>📥 Download Results</h3>
+                    <p>Export your evaluation results to Excel format for further analysis</p>
+                    <a href="/download_custom_excel/{{ model_name }}" class="download-btn">
+                        📊 Download Excel Report
+                    </a>
+                </div>
+
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStage = 0;
+        const stages = [
+            "Loading models and initializing...",
+            "Processing uploaded files...",
+            "Analyzing document content...",
+            "Comparing with ground truth...",
+            "Finalizing evaluation..."
+        ];
+
+        function updateProgressStage(stage) {
+            // Reset all stages
+            for (let i = 1; i <= 5; i++) {
+                const stageEl = document.getElementById(`stage-${i}`);
+                stageEl.classList.remove('active', 'completed');
+            }
+            
+            // If stage 6 (completion), mark all as completed
+            if (stage >= 6) {
+                for (let i = 1; i <= 5; i++) {
+                    document.getElementById(`stage-${i}`).classList.add('completed');
+                }
+                return;
+            }
+            
+            // Mark completed stages
+            for (let i = 1; i < stage; i++) {
+                document.getElementById(`stage-${i}`).classList.add('completed');
+            }
+            
+            // Mark current stage as active
+            if (stage <= 5 && stage > 0) {
+                document.getElementById(`stage-${stage}`).classList.add('active');
+            }
+        }
+
+        function redoEvaluation() {
+            const redoBtn = document.getElementById('redoEvalBtn');
+            
+            if (!confirm('This will clear the current results and start a new evaluation. Continue?')) {
+                return;
+            }
+            
+            // Disable button
+            redoBtn.disabled = true;
+            redoBtn.textContent = '🔄 Clearing...';
+            
+            // Clear previous results
+            fetch(`/clear_custom_results/{{ model_name }}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Hide results section and show evaluation section
+                    document.getElementById('results-section').style.display = 'none';
+                    document.getElementById('eval-section').style.display = 'block';
+                    
+                    // Reset button
+                    redoBtn.disabled = false;
+                    redoBtn.textContent = '🔄 Redo Evaluation';
+                    
+                    // Hide redo section
+                    document.querySelector('.redo-section').style.display = 'none';
+                    
+                } else {
+                    showError('Failed to clear results: ' + data.message);
+                    redoBtn.disabled = false;
+                    redoBtn.textContent = '🔄 Redo Evaluation';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showError('Failed to clear results: ' + error.message);
+                redoBtn.disabled = false;
+                redoBtn.textContent = '🔄 Redo Evaluation';
+            });
+        }
+
+        function startCustomEvaluation() {
+                    const startBtn = document.getElementById('startEvalBtn');
+                    const statusSection = document.getElementById('status-section');
+                    const evalSection = document.getElementById('eval-section');
+                    
+                    // Disable button and show status
+                    startBtn.disabled = true;
+                    startBtn.textContent = 'Processing...';
+                    statusSection.style.display = 'block';
+                    evalSection.style.display = 'none';
+
+                    // Start with first stage
+                    currentStage = 1;
+                    updateProgressStage(currentStage);
+
+                    // Start evaluation
+                    fetch(`/run_custom_evaluation/{{ model_name }}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'started') {
+                            // Start polling for status
+                            pollEvaluationStatus();
+                        } else {
+                            showError('Failed to start evaluation: ' + (data.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        showError('Failed to start evaluation: ' + error.message);
+                    });
+                }
+
+        function pollEvaluationStatus() {
+            const statusText = document.getElementById('status-text');
+            
+            const pollInterval = setInterval(() => {
+                fetch(`/check_custom_status/{{ model_name }}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Status check:', data);
+                    
+                    if (data.status === 'complete') {
+                        clearInterval(pollInterval);
+                        // Complete all stages
+                        updateProgressStage(6);
+                        statusText.textContent = 'Evaluation completed successfully!';
+                        setTimeout(() => showResults(data.results), 1500);
+                    } else if (data.status === 'error') {
+                        clearInterval(pollInterval);
+                        const errorMsg = data.results?.error || data.progress?.message || 'Unknown error';
+                        showError('Evaluation failed: ' + errorMsg);
+                    } else if (data.status === 'processing') {
+                        // Update progress based on actual stage from backend
+                        if (data.progress && data.progress.stage) {
+                            const stage = data.progress.stage;
+                            const message = data.progress.message;
+                            
+                            console.log(`Updating to stage ${stage}: ${message}`);
+                            
+                            // Update current stage and visual progress
+                            if (stage !== currentStage && stage > 0) {
+                                currentStage = stage;
+                                updateProgressStage(currentStage);
+                            }
+                            
+                            // Update status text with actual message from backend
+                            statusText.textContent = message || stages[currentStage - 1] || 'Processing...';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Status check error:', error);
+                    // Don't clear interval on network errors, just log them
+                });
+            }, 1500); // Reduced polling interval for better responsiveness
+        }
+
+        function showResults(results) {
+            const statusSection = document.getElementById('status-section');
+            
+            statusSection.style.display = 'none';
+            
+            if (results && !results.error) {
+                // Reload the page to show results
+                location.reload();
+            } else {
+                showError('Evaluation completed but no results available: ' + (results?.error || 'Unknown error'));
+            }
+        }
+
+        function showError(message) {
+            const statusSection = document.getElementById('status-section');
+            const startBtn = document.getElementById('startEvalBtn');
+            const evalSection = document.getElementById('eval-section');
+            
+            statusSection.style.display = 'none';
+            evalSection.style.display = 'block';
+            startBtn.disabled = false;
+            startBtn.textContent = 'Start Custom Evaluation';
+            
+            // Show error message
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger';
+            alertDiv.innerHTML = '<strong>❌ Error:</strong> ' + message;
+            
+            const container = document.querySelector('.container .card');
+            container.insertBefore(alertDiv, container.firstChild);
+            
+            // Remove error message after 10 seconds
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 10000);
+        }
+
+        // Show results if they exist
+        {% if evaluation_results and not evaluation_results.get('error') %}
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('results-section').style.display = 'block';
+            document.getElementById('eval-section').style.display = 'none';
+        });
+        {% endif %}
+    </script>
+</body>
+</html>

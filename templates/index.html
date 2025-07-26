@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Evaluator</title>
+    <style>
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: #f7f7f7;
+        min-height: 100vh;
+        color: #333;
+    }
+    header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 30px;
+        background: #f7f7f7;
+    }
+    header img {
+        height: 75px;
+        transition: transform 0.3s ease;
+    }
+    header img:hover {
+        transform: scale(1.05);
+    }
+    nav {
+        width: 100%;
+        text-align: left;
+        padding: 5px 0px;
+        background: #667eea;
+    }
+    nav a {
+        color: #fff;
+        text-decoration: none;
+        font-size: 16px;
+        font-weight: 500;
+        margin-right: 30px;
+        padding: 10px 10px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        display: inline-block;
+    }
+    nav a:hover:not(.greyed) {
+        background: #667eea;
+        color: #667eea;
+    }
+    h1 {
+        color: #667eea;
+        text-align: center;
+        margin-top: 10px;
+        font-size: 2.5rem;
+        font-weight: 700;
+    }
+    .categories-grid {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 40px 0;
+        min-height: 60vh;
+    }
+    .category-card {
+        background: rgba(255, 255, 255, 0.55);
+        border-radius: 32px;
+        padding: 60px 80px;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        min-width: 500px;
+        max-width: 900px;
+        width: 100%;
+        margin: auto;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        transition: box-shadow 0.3s;
+    }
+    .category-card:hover {
+        box-shadow: 0 12px 48px 0 rgba(31, 38, 135, 0.45);
+    }
+    .category-card h2 {
+        color: #667eea;
+        margin-bottom: 25px;
+        font-size: 32px;
+        text-align: center;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-shadow: 0 2px 8px rgba(102,126,234,0.08);
+    }
+    .model {
+        font-size: 22px;
+        margin-bottom: 15px;
+        text-align: center;
+        color: #4a5568;
+    }
+    .buttons {
+        margin-top: 15px;
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+    }
+    .eval-btn, .cstm-eval-btn {
+        padding: 14px 32px;
+        border: none;
+        border-radius: 16px;
+        cursor: pointer;
+        font-size: 18px;
+        font-weight: 600;
+        background: rgba(102,126,234,0.85);
+        color: #fff;
+        box-shadow: 0 2px 8px rgba(102,126,234,0.12);
+        transition: background 0.3s, transform 0.3s, box-shadow 0.3s;
+    }
+    .eval-btn:hover, .cstm-eval-btn:hover {
+        background: #764ba2;
+        transform: scale(1.05);
+        box-shadow: 0 4px 16px rgba(118,75,162,0.18);
+    }
+    .apple-dropdown {
+        background: rgba(247,247,247,0.85);
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px 18px;
+        font-size: 18px;
+        color: #2d3748;
+        cursor: pointer;
+        outline: none;
+        margin-top: 10px;
+        margin-bottom: 10px;
+        box-shadow: 0 1px 4px rgba(44,62,80,0.08);
+    }
+    @media (max-width: 700px) {
+        .category-card {
+            padding: 20px 10px;
+            min-width: 0;
+            max-width: 95vw;
+        }
+        .categories-grid {
+            padding: 10px 0;
+        }
+    }
+</style>
+</head>
+<body>
+    <header>
+        <img src="/static/infosys.png" alt="Logo">
+        <h1>Model Evaluation Dashboard</h1>
+        <img src="/static/ABCBank.png" alt="Logo">
+    </header>
+
+    <nav>
+        <a href="/"></a>
+    </nav>
+    <div class="categories-grid" style="grid-template-columns: 1fr;">
+        
+        <div class="category-card" style="margin: auto;">
+            <h2>Models Available</h2>
+            <div class="model">
+                
+                <select id="benchmark-llm-1" class="apple-dropdown">
+                    <option value="Wealth Advisory Model" selected>Wealth Advisory Model</option>
+                    <option value="Compliance Model">Compliance Model</option>
+                </select>
+                <br>
+                
+                <div class="buttons">
+                    <form id="standard-eval-form" method="post">
+                        <input type="hidden" name="benchmark" id="benchmark-input-llm-1">
+                        <button class="eval-btn" type="submit" onclick="setBenchmarkAndRoute('standard')">Standard Evaluation</button>
+                    </form>
+                    <form id="custom-eval-form" method="get">
+                        <button class="cstm-eval-btn" type="submit" onclick="setBenchmarkAndRoute('custom')">Custom Evaluation</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <script>
+        function setBenchmarkAndRoute(type) {
+            const dropdown = document.getElementById('benchmark-llm-1');
+            const selectedModel = dropdown.value;
+            document.getElementById('benchmark-input-llm-1').value = selectedModel;
+
+            let form, route;
+            if (type === 'standard') {
+                form = document.getElementById('standard-eval-form');
+                route = "{{ url_for('evaluate_llm', model_name='__MODEL__') }}";
+                form.action = route.replace('__MODEL__', encodeURIComponent(selectedModel));
+            } else {
+                form = document.getElementById('custom-eval-form');
+                route = "{{ url_for('custom_llm', model_name='__MODEL__') }}";
+                form.action = route.replace('__MODEL__', encodeURIComponent(selectedModel));
+            }
+        }
+    </script>
+</body>
+</html>
