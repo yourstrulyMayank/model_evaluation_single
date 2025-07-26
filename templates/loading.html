@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Evaluating Model...</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evaluating {{ model_name }}</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -21,6 +22,38 @@
 
         header img {
             height: 75px;
+        }
+
+        header h1 {
+            color: #0071e3;
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: normal;
+        }
+
+        nav {
+            width: 100%;
+            text-align: left;
+            padding: 10px 20px;
+            background-color: #005bb5;
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+            margin-right: 20px;
+        }
+
+        nav a.greyed {
+            color: #ccc;
+            pointer-events: none;
+        }
+
+        nav a:hover:not(.greyed) {
+            background-color: #0071e3;
+            padding: 5px 10px;
+            border-radius: 4px;
         }
 
         .container {
@@ -93,6 +126,10 @@
             color: #007acc;
             margin-bottom: 15px;
             text-shadow: 0 1px 3px rgba(0, 122, 204, 0.1);
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .status-detail {
@@ -150,31 +187,16 @@
             line-height: 1.3;
         }
 
-        nav {
-            width: 100%;
-            text-align: left;
-            padding: 10px 20px;
-            background-color: #005bb5;
-        }
-
-        nav a {
-            color: white;
-            text-decoration: none;
-            font-size: 16px;
-            margin-right: 20px;
-        }
-
-        nav a.greyed {
-            color: #ccc;
-            pointer-events: none;
-        }
-
-        nav a:hover:not(.greyed) {
-            background-color: #0071e3;
-        }
-
         /* Responsive Design */
         @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
             .progress-stages {
                 flex-direction: column;
                 gap: 10px;
@@ -183,71 +205,26 @@
             .stage {
                 min-width: 200px;
             }
+
+            .status-text {
+                font-size: 18px;
+            }
+
+            .status-detail {
+                font-size: 14px;
+            }
         }
     </style>
-    <script>
-        const stages = [
-            "Initializing model and tokenizer...",
-            "Loading benchmark tasks...",
-            "Running evaluation on tasks...",
-            "Aggregating results...",
-            "Finalizing and saving results..."
-        ];
-        function updateProgressStage(stage) {
-            for (let i = 1; i <= 5; i++) {
-                const stageEl = document.getElementById(`stage-${i}`);
-                stageEl.classList.remove('active', 'completed');
-            }
-            if (stage >= 6) {
-                for (let i = 1; i <= 5; i++) {
-                    document.getElementById(`stage-${i}`).classList.add('completed');
-                }
-                return;
-            }
-            for (let i = 1; i < stage; i++) {
-                document.getElementById(`stage-${i}`).classList.add('completed');
-            }
-            if (stage <= 5 && stage > 0) {
-                document.getElementById(`stage-${stage}`).classList.add('active');
-            }
-        }
-        function checkStatus() {
-            const modelName = "{{ model_name }}";
-            fetch(`/check_status/${modelName}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === "complete") {
-                        updateProgressStage(6);
-                        document.getElementById('status-text').textContent = 'Evaluation completed successfully!';
-                        setTimeout(() => {
-                            window.location.href = `/results/${modelName}`;
-                        }, 1500);
-                    } else if (data.status === "error") {
-                        document.getElementById('status-text').textContent = '❌ An error occurred during evaluation. Please try again.';
-                    } else {
-                        // Update progress
-                        if (data.progress && data.progress.stage) {
-                            updateProgressStage(data.progress.stage);
-                            document.getElementById('status-text').textContent = data.progress.message || stages[data.progress.stage-1] || 'Processing...';
-                        }
-                        setTimeout(checkStatus, 1500);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                });
-        }
-        window.onload = checkStatus;
-    </script>
 </head>
 <body>
     <header>
-        <img src="/static/infosys.png" alt="Logo">
+        <img src="/static/infosys.png" alt="Infosys Logo">
         <h1>Model Evaluation</h1>
-        <img src="/static/ABCBank.png" alt="Logo">
+        <img src="/static/ABCBank.png" alt="ABC Bank Logo">
     </header>
+    
     <nav>
-        <a href="/"></a>
+        <a href="/">← Back to Home</a>
     </nav>
 
     <div class="container">
@@ -256,13 +233,13 @@
             
             <div class="status-section">
                 <div class="spinner"></div>
-                <div class="status-text" id="status-text">Initializing evaluation...</div>
-                <div class="status-detail">Please wait while we process the evaluation tasks.</div>
+                <div class="status-text" id="status-text">Preparing to start evaluation...</div>
+                <div class="status-detail">BIG-Bench Evaluation in Progress - Please wait while we process the evaluation tasks.</div>
                 
                 <!-- Progress Stages -->
                 <div class="progress-stages">
                     <div class="stage" id="stage-1">
-                        <div class="stage-icon">🔄</div>
+                        <div class="stage-icon">🔧</div>
                         <div class="stage-text">Model Init</div>
                     </div>
                     <div class="stage" id="stage-2">
@@ -285,5 +262,105 @@
             </div>
         </div>
     </div>
+
+    <script>
+        const stages = [
+            "Initializing model and tokenizer...",
+            "Loading benchmark tasks...",
+            "Running evaluation on tasks...",
+            "Aggregating results...",
+            "Finalizing and saving results..."
+        ];
+
+        function updateProgressStage(stage) {
+            // Reset all stages
+            for (let i = 1; i <= 5; i++) {
+                const stageEl = document.getElementById(`stage-${i}`);
+                stageEl.classList.remove('active', 'completed');
+            }
+            
+            // If evaluation is complete
+            if (stage >= 6) {
+                for (let i = 1; i <= 5; i++) {
+                    document.getElementById(`stage-${i}`).classList.add('completed');
+                }
+                return;
+            }
+            
+            // Mark completed stages
+            for (let i = 1; i < stage; i++) {
+                document.getElementById(`stage-${i}`).classList.add('completed');
+            }
+            
+            // Mark current active stage
+            if (stage <= 5 && stage > 0) {
+                document.getElementById(`stage-${stage}`).classList.add('active');
+            }
+        }
+
+        function startEvaluation() {
+            const modelName = "{{ model_name }}";
+            
+            // Start evaluation via AJAX POST
+            fetch(`/start_evaluation/${modelName}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Evaluation started:', data);
+                if (data.status === 'started') {
+                    // Start polling for progress
+                    checkStatus();
+                } else {
+                    document.getElementById('status-text').textContent = '❌ Failed to start evaluation: ' + (data.error || 'Unknown error');
+                }
+            })
+            .catch(error => {
+                console.error('Error starting evaluation:', error);
+                document.getElementById('status-text').textContent = '❌ Failed to start evaluation. Please try again.';
+            });
+        }
+
+        function checkStatus() {
+            const modelName = "{{ model_name }}";
+            
+            fetch(`/check_status/${modelName}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Status update:', data);
+                    
+                    if (data.status === "complete") {
+                        updateProgressStage(6);
+                        document.getElementById('status-text').textContent = '🎉 Evaluation completed successfully!';
+                        setTimeout(() => {
+                            window.location.href = `/results/${modelName}`;
+                        }, 2000);
+                    } else if (data.status === "error") {
+                        document.getElementById('status-text').textContent = '❌ ' + (data.progress.message || 'An error occurred during evaluation.');
+                    } else {
+                        // Update progress
+                        if (data.progress && data.progress.stage) {
+                            updateProgressStage(data.progress.stage);
+                            const message = data.progress.message || stages[data.progress.stage-1] || 'Processing...';
+                            document.getElementById('status-text').textContent = message;
+                        }
+                        // Continue polling
+                        setTimeout(checkStatus, 2000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking status:', error);
+                    setTimeout(checkStatus, 3000); // Retry with longer delay
+                });
+        }
+
+        // Start evaluation when page loads
+        window.onload = function() {
+            startEvaluation();
+        };
+    </script>
 </body>
 </html>

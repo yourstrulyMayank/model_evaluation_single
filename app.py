@@ -18,8 +18,7 @@ import threading
 import uuid
 from weasyprint import HTML, CSS
 
-from llm_tool_bigbench_utils import ( get_history,
-                                        run_evaluation_in_background,
+from llm_tool_bigbench_utils import ( run_evaluation_in_background,
                                         extract_score_from_results)
 
 
@@ -53,8 +52,11 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Add this global variable with other globals
 
-
-
+MODELS = {
+    "Wealth Advisory Model": "models/wealth_advisory", 
+    "Compliance Model": "models/compliance"
+}
+current_results = {}
 
 # Create folders
 
@@ -79,14 +81,38 @@ STANDARD_EVAL_STAGES = [
     "Finalizing and saving results..."
 ]
 
-def update_standard_progress(model_name, stage, message):
-    """Update progress for standard evaluation."""
-    evaluation_progress[model_name] = {
-        'stage': stage,
-        'message': message,
-        'timestamp': datetime.now().isoformat()
-    }
-    print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+# def update_standard_progress(model_name, stage, message):
+#     """Update progress for standard evaluation with proper synchronization."""
+#     progress_data = {
+#         'stage': stage,
+#         'message': message,
+#         'timestamp': datetime.now().isoformat()
+#     }
+    
+#     # Store locally first
+#     _evaluation_progress[model_name] = progress_data
+    
+#     # Try to update app module - this is the key fix
+#     try:
+#         import sys
+#         if 'app' in sys.modules:
+#             app = sys.modules['app']
+#             if hasattr(app, 'evaluation_progress'):
+#                 app.evaluation_progress[model_name] = progress_data
+#             if hasattr(app, 'processing_status'):
+#                 # Update processing status based on stage
+#                 if stage == -1:
+#                     app.processing_status[model_name] = "error"
+#                 elif stage >= 6:
+#                     app.processing_status[model_name] = "complete"
+#                 else:
+#                     app.processing_status[model_name] = "processing"
+#             print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+#         else:
+#             print(f"📊 Progress Update (app module not found) - {model_name}: Stage {stage} - {message}")
+#     except Exception as e:
+#         print(f"Failed to update app progress: {e}")
+#         print(f"📊 Progress Update (local fallback) - {model_name}: Stage {stage} - {message}")
 
 
 @app.route('/')
@@ -95,37 +121,33 @@ def index():
 
 @app.route('/download_report/<model_name>')
 def download_report(model_name):
-    # PDF generation
+    """Generate PDF report from current results only."""
+    if model_name not in MODELS:
+        flash("Model not found.")
+        return redirect(url_for('index'))
+    
     try:
-        # from weasyprint import HTML, CSS
         from jinja2 import Template
         PDF_AVAILABLE = True
     except ImportError:
-        print("⚠️ PDF generation not available. Install: pip install weasyprint")
         PDF_AVAILABLE = False
-    """Generate and download PDF report."""
+    
     if not PDF_AVAILABLE:
         flash("PDF generation not available. Please install weasyprint.")
         return redirect(url_for('analyze', model_name=model_name))
     
     try:
-        # Load results data
-        history_file = "evaluation_results/llm/history.json"        
-        if os.path.exists(history_file):
-            with open(history_file, 'r') as f:
-                all_history = json.load(f)                
-            history_data = [entry for entry in all_history if model_name in entry["model_path"]]
-        else:
-            history_data = []
-            
-        if not history_data:
+        # Get current results only
+        results_data = current_results.get(model_name, [])
+        
+        if not results_data:
             flash("No evaluation results found for this model.")
             return redirect(url_for('analyze', model_name=model_name))
         
         # Render HTML template for PDF
-        html_content = render_template('llm/pdf_report.html', 
+        html_content = render_template('pdf_report.html', 
                                      model_name=model_name, 
-                                     history=history_data)
+                                     results=results_data)
         
         # Generate PDF
         pdf_buffer = BytesIO()
@@ -146,22 +168,20 @@ def download_report(model_name):
 
 @app.route('/export_json/<model_name>')
 def export_json(model_name):
-    """Export results as JSON file."""
+    """Export current results as JSON file."""
+    if model_name not in MODELS:
+        flash("Model not found.")
+        return redirect(url_for('index'))
+    
     try:
-        history_file = "evaluation_results/llm/history.json"
-        if os.path.exists(history_file):
-            with open(history_file, 'r') as f:
-                all_history = json.load(f)
-            history_data = [entry for entry in all_history if model_name in entry["model_path"]]
-        else:
-            history_data = []
-            
-        if not history_data:
+        results_data = current_results.get(model_name, [])
+        
+        if not results_data:
             flash("No evaluation results found for this model.")
             return redirect(url_for('analyze', model_name=model_name))
         
         # Create JSON response
-        response = make_response(json.dumps(history_data, indent=2))
+        response = make_response(json.dumps(results_data, indent=2))
         response.headers['Content-Type'] = 'application/json'
         response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_results.json"'
         
@@ -170,23 +190,36 @@ def export_json(model_name):
     except Exception as e:
         flash(f"Error exporting JSON: {str(e)}")
         return redirect(url_for('analyze', model_name=model_name))
+
     
-@app.route('/evaluate_model/<category>/<model_name>')
-def evaluate(category, model_name):
-    categories = {
-        "LLMs": "llm",
-        "Other GenAI Models": "genai",
-        "DL Models": "dl",
-        "ML Models": "ml"
-    }
+@app.route('/evaluate_model/<model_name>')
+def evaluate(model_name):
+    # Simplified - no category needed
+    if model_name not in MODELS:
+        return f"Model '{model_name}' not found.", 404
 
-    category_folder = categories.get(category)
-    if not category_folder:
-        return "Unknown category", 400
-
-    model_path = os.path.join(model_base_path, category_folder, model_name)
+    model_path = MODELS[model_name]
     if not os.path.exists(model_path):
         return f"Model '{model_name}' not found.", 404
+
+    # Set initial status
+    processing_status[model_name] = "processing"
+    evaluation_progress[model_name] = {
+        'stage': 0,
+        'message': 'Preparing to start evaluation...',
+        'timestamp': datetime.now().isoformat()
+    }
+
+    return render_template('loading.html', model_name=model_name)
+
+@app.route('/start_evaluation/<model_name>', methods=['POST'])
+def start_evaluation(model_name):
+    if model_name not in MODELS:
+        return jsonify({'error': 'Unknown model'}), 400
+
+    model_path = MODELS[model_name]
+    if not os.path.exists(model_path):
+        return jsonify({'error': f"Model '{model_name}' not found."}), 404
 
     # Default evaluation parameters
     eval_params = {
@@ -195,63 +228,122 @@ def evaluate(category, model_name):
         'full_benchmark': False
     }
     
+    # Start evaluation in background
     run_evaluation_in_background(model_name, model_path, eval_params)
-    return render_template('llm/loading.html', model_name=model_name)
+    
+    return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
 
 
+# @app.route('/evaluate_llm/<model_name>', methods=['POST', 'GET'])
+# def evaluate_llm(model_name):
+#     if request.method == 'GET':
+#         # Just show the loading page
+#         processing_status[model_name] = "processing"
+#         evaluation_progress[model_name] = {
+#             'stage': 0,
+#             'message': 'Preparing to start evaluation...',
+#             'timestamp': datetime.now().isoformat()
+#         }
+#         return render_template('loading.html', model_name=model_name)
+    
+#     # Handle POST request (actual evaluation)
+#     benchmark = "BIG-Bench"
+#     num_examples = int(request.form.get('num_examples', 25))
+#     max_tokens = int(request.form.get('max_tokens', 128))
+#     full_benchmark = request.form.get('full_benchmark') == 'on'
 
+#     print(f"Evaluating {model_name} on benchmark: {benchmark}")
+
+#     # Determine folder based on model_name
+#     if model_name == "Wealth Advisory Model":
+#         model_folder = "wealth_advisory"
+#     elif model_name == "Compliance Model":
+#         model_folder = "compliance"
+#     else:
+#         flash(f"Unknown model: {model_name}")
+#         return redirect(url_for('index'))
+
+#     model_path = os.path.join(model_base_path, model_folder)
+#     if not os.path.exists(model_path):
+#         return f"Model '{model_name}' not found in '{model_folder}'.", 404
+
+#     eval_params = {
+#         'num_examples': num_examples,
+#         'max_tokens': max_tokens,
+#         'full_benchmark': full_benchmark
+#     }
+
+#     run_evaluation_in_background(model_name, model_path, eval_params)
+#     return render_template('loading.html', model_name=model_name)
+# Add this global variable with other globals
+current_results = {}
+
+# Updated evaluate_llm function
 @app.route('/evaluate_llm/<model_name>', methods=['POST', 'GET'])
 def evaluate_llm(model_name):
-    # Always use BIG-Bench as benchmark
-    benchmark = "BIG-Bench"
-    num_examples = int(request.form.get('num_examples', 25))
-    max_tokens = int(request.form.get('max_tokens', 128))
-    full_benchmark = request.form.get('full_benchmark') == 'on'
+    if request.method == 'GET':
+        # Just show the loading page
+        processing_status[model_name] = "processing"
+        evaluation_progress[model_name] = {
+            'stage': 0,
+            'message': 'Preparing to start evaluation...',
+            'timestamp': datetime.now().isoformat()
+        }
+        return render_template('loading.html', model_name=model_name)
+    
+    # Handle POST request (actual evaluation)
+    print(f"Evaluating {model_name}")
 
-    print(f"Evaluating {model_name} on benchmark: {benchmark}")
-
-    # Determine folder based on model_name
-    if model_name == "Wealth Advisory Model":
-        model_folder = "wealth_advisory"
-    elif model_name == "Compliance Model":
-        model_folder = "compliance"
-    else:
+    # Check if model exists in MODELS
+    if model_name not in MODELS:
         flash(f"Unknown model: {model_name}")
         return redirect(url_for('index'))
 
-    model_path = os.path.join(model_base_path, model_folder)
+    model_path = MODELS[model_name]
     if not os.path.exists(model_path):
-        return f"Model '{model_name}' not found in '{model_folder}'.", 404
+        return f"Model '{model_name}' not found.", 404
 
+    # Default evaluation parameters
     eval_params = {
-        'num_examples': num_examples,
-        'max_tokens': max_tokens,
-        'full_benchmark': full_benchmark
+        'num_examples': 5,
+        'max_tokens': 128,
+        'full_benchmark': False
     }
 
     run_evaluation_in_background(model_name, model_path, eval_params)
-    # Set initial progress
-    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
     return render_template('loading.html', model_name=model_name)
-
 
 @app.route('/check_status/<model_name>')
 def check_status(model_name):
+    # Get app-level status (fallback to not_started)
     status = processing_status.get(model_name, "not_started")
-    progress = evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
     
-    # If no progress in app, check the utils module
-    if progress['stage'] == 0:
-        try:
-            from llm_tool_bigbench_utils import get_progress
-            utils_progress = get_progress(model_name)
-            if utils_progress['stage'] > 0:
-                progress = utils_progress
-        except:
-            pass
+    # Get progress from utils module (primary source)
+    try:
+        from llm_tool_bigbench_utils import get_progress
+        progress = get_progress(model_name)
+        
+        # Sync progress back to app for consistency
+        evaluation_progress[model_name] = progress
+        
+    except Exception as e:
+        print(f"⚠️ Could not get progress from utils: {e}")
+        # Fallback to app's local progress
+        progress = evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
+    
+    # Auto-update status based on progress stage if needed
+    if progress.get('stage', 0) >= 6 and status != "complete":
+        status = "complete" 
+        processing_status[model_name] = "complete"
+    elif progress.get('stage', 0) == -1 and status != "error":
+        status = "error"
+        processing_status[model_name] = "error"
+    elif progress.get('stage', 0) > 0 and status == "not_started":
+        status = "processing"
+        processing_status[model_name] = "processing"
     
     # Debug logging
-    print(f"Status check for {model_name}: status={status}, progress={progress}")
+    print(f"📊 Status check for {model_name}: status={status}, progress_stage={progress.get('stage', 0)}")
     
     return jsonify({
         "status": status,
@@ -350,46 +442,14 @@ def history(category, model_name):
 
 @app.route('/results/<model_name>')
 def analyze(model_name):
-    """Enhanced results page with comprehensive metrics display."""
-    try:
-        # Determine category for this model
-        category = None
-        categories_mapping = {
-            "LLMs": "llm",
-            "Other GenAI Models": "genai", 
-            "DL Models": "dl",
-            "ML Models": "ml"
-        }
-        
-        # Find which category this model belongs to
-        for display_name, folder in categories_mapping.items():
-            path = os.path.join(model_base_path, folder)
-            if os.path.exists(path):
-                models = [model for model in os.listdir(path) if os.path.isdir(os.path.join(path, model))]
-                if model_name in models:
-                    category = display_name
-                    break
-        
-        # Default to LLMs if not found
-        if not category:
-            category = "LLMs"
-        
-        # Load enhanced results
-        history_file = "evaluation_results/llm/history.json"
-        if os.path.exists(history_file):
-            with open(history_file, 'r') as f:
-                all_history = json.load(f)
-            history_data = [entry for entry in all_history if model_name in entry["model_path"]]
-        else:
-            # Fallback to old format
-            history_data = get_history(model_name)
-            
-    except Exception as e:
-        print(f"Error loading results: {e}")
-        history_data = []
-        category = "LLMs"
+    """Simplified results page - only current run."""
+    if model_name not in MODELS:
+        return f"Model '{model_name}' not found.", 404
     
-    return render_template('llm/tool_evaluate.html', model_name=model_name, history=history_data, category=category)
+    # Get current results only
+    results_data = current_results.get(model_name, [])
+    
+    return render_template('results.html', model_name=model_name, results=results_data)
 
 
 UPLOAD_FOLDER = 'uploads'
@@ -400,15 +460,9 @@ custom_evaluation_results = {}
 processing_status = {}
 custom_evaluation_progress = {} 
 model_base_path = "models"
-
 @app.route('/custom_llm/<model_name>')
 def custom_llm(model_name):
-    # Determine folder based on model_name
-    if model_name == "Wealth Advisory Model":
-        model_folder = "wealth_advisory"
-    elif model_name == "Compliance Model":
-        model_folder = "compliance"
-    else:
+    if model_name not in MODELS:
         flash(f"Unknown model: {model_name}")
         return redirect(url_for('index'))
 
@@ -417,8 +471,8 @@ def custom_llm(model_name):
     if os.path.exists(model_upload_dir):
         uploaded_files = [f for f in os.listdir(model_upload_dir) if os.path.isfile(os.path.join(model_upload_dir, f))]
     
-    # Get evaluation results if available
-    results = custom_evaluation_results.get(model_name, {})
+    # Get current evaluation results only
+    results = current_results.get(f"{model_name}_custom", {})
     
     return render_template('custom_llm.html', 
                          model_name=model_name, 
@@ -428,18 +482,21 @@ def custom_llm(model_name):
 
 @app.route('/run_custom_evaluation/<model_name>', methods=['POST'])
 def run_custom_evaluation_route(model_name):
+    if model_name not in MODELS:
+        return jsonify({'error': 'Unknown model'}), 400
+    
     try:
         # Import custom evaluator
         from llm_custom_utils import run_custom_evaluation
         
         # Get model path
-        model_path = os.path.join(model_base_path, "llm", model_name)
+        model_path = MODELS[model_name]
         upload_dir = os.path.join(UPLOAD_FOLDER)
         
         if not os.path.exists(upload_dir):
             return jsonify({'error': 'No files uploaded for evaluation'}), 400
         
-        # Set processing status BEFORE starting background task
+        # Set processing status
         processing_status[f"{model_name}_custom"] = "processing"
         
         def background_evaluation():
@@ -449,7 +506,8 @@ def run_custom_evaluation_route(model_name):
                 results = run_custom_evaluation(model_name, model_path, upload_dir)
                 print(f"Custom evaluation completed for {model_name}")
                 
-                custom_evaluation_results[model_name] = results
+                # Store in current results only
+                current_results[f"{model_name}_custom"] = results
                 processing_status[f"{model_name}_custom"] = "complete"
                 
             except Exception as e:
@@ -458,12 +516,11 @@ def run_custom_evaluation_route(model_name):
                 traceback.print_exc()
                 
                 processing_status[f"{model_name}_custom"] = "error"
-                custom_evaluation_results[model_name] = {"error": str(e)}
+                current_results[f"{model_name}_custom"] = {"error": str(e)}
         
         # Run in background
         threading.Thread(target=background_evaluation, daemon=True).start()
         
-        # Return success response
         return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
         
     except Exception as e:
@@ -476,18 +533,14 @@ def run_custom_evaluation_route(model_name):
 def clear_custom_results(model_name):
     """Clear custom evaluation results for a model."""
     try:
-        # Clear from global storage
-        if model_name in custom_evaluation_results:
-            del custom_evaluation_results[model_name]
+        # Clear from current results only
+        custom_key = f"{model_name}_custom"
+        if custom_key in current_results:
+            del current_results[custom_key]
         
         # Clear processing status
-        status_key = f"{model_name}_custom"
-        if status_key in processing_status:
-            del processing_status[status_key]
-        
-        # Clear progress tracking from custom_evaluate_llm
-        from custom_evaluate_llm import clear_progress
-        clear_progress(model_name)
+        if custom_key in processing_status:
+            del processing_status[custom_key]
         
         return jsonify({'status': 'success', 'message': 'Results cleared successfully'})
         
@@ -497,18 +550,18 @@ def clear_custom_results(model_name):
 
 
 
-
-
 @app.route('/check_custom_status/<model_name>')
 def check_custom_status(model_name):
     status_key = f"{model_name}_custom"
     status = processing_status.get(status_key, "not_started")
-    results = custom_evaluation_results.get(model_name, {})
-    from llm_custom_utils import get_progress
-    # Get progress information from llm_custom_utils
-    progress_info = get_progress(model_name)
+    results = current_results.get(status_key, {})
     
-    print(f"Status check for {model_name}: {status}, Progress: {progress_info}")  # Debug log
+    # Get progress information
+    try:
+        from llm_custom_utils import get_progress
+        progress_info = get_progress(model_name)
+    except:
+        progress_info = {'stage': 0, 'message': 'Not started'}
     
     response_data = {
         "status": status,
@@ -522,19 +575,22 @@ def check_custom_status(model_name):
 @app.route('/download_custom_excel/<model_name>')
 def download_custom_excel(model_name):
     """Download custom evaluation results as Excel file."""
+    if model_name not in MODELS:
+        flash("Model not found.")
+        return redirect(url_for('index'))
+    
     try:
-        # Get evaluation results
-        results = custom_evaluation_results.get(model_name, {})
+        # Get current evaluation results only
+        results = current_results.get(f"{model_name}_custom", {})
         
         if not results or results.get('error'):
             flash("No evaluation results found for this model.")
             return redirect(url_for('custom_llm', model_name=model_name))
         
-        # Import pandas for Excel creation
+        # Same Excel generation logic as before...
         import pandas as pd
         from io import BytesIO
         
-        # Create Excel file in memory
         output = BytesIO()
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -542,7 +598,6 @@ def download_custom_excel(model_name):
             if 'ground_truth_comparison' in results:
                 comparison_data = results['ground_truth_comparison']
                 
-                # Create DataFrame with original format plus model outputs
                 df_results = pd.DataFrame([
                     {
                         'Prompt': item['prompt'],
@@ -560,18 +615,10 @@ def download_custom_excel(model_name):
             # Summary sheet
             summary_data = {
                 'Metric': [
-                    'Model Name',
-                    'Evaluation Date',
-                    'Total Tests',
-                    'Tests Passed',
-                    'Tests Failed', 
-                    'Intermittent Tests',
-                    'Overall Score (%)',
-                    'Success Rate (%)',
-                    'Average Score',
-                    'Highest Score',
-                    'Lowest Score',
-                    'Files Processed'
+                    'Model Name', 'Evaluation Date', 'Total Tests', 'Tests Passed',
+                    'Tests Failed', 'Intermittent Tests', 'Overall Score (%)',
+                    'Success Rate (%)', 'Average Score', 'Highest Score',
+                    'Lowest Score', 'Files Processed'
                 ],
                 'Value': [
                     results.get('model_name', model_name),
@@ -591,20 +638,9 @@ def download_custom_excel(model_name):
             
             df_summary = pd.DataFrame(summary_data)
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
-            
-            # File info sheet
-            if 'file_info' in results:
-                file_info = results['file_info']
-                df_files = pd.DataFrame([
-                    {'File Type': 'Image File', 'File Name': file_info.get('image_file', 'N/A')},
-                    {'File Type': 'Transaction File', 'File Name': file_info.get('transaction_file', 'N/A')},
-                    {'File Type': 'Ground Truth File', 'File Name': file_info.get('ground_truth_file', 'N/A')}
-                ])
-                df_files.to_excel(writer, sheet_name='File_Info', index=False)
         
         output.seek(0)
         
-        # Create response
         response = make_response(output.getvalue())
         response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_custom_evaluation_results.xlsx"'
@@ -615,8 +651,6 @@ def download_custom_excel(model_name):
         print(f"Error generating Excel file: {e}")
         flash(f"Error generating Excel file: {str(e)}")
         return redirect(url_for('custom_llm', model_name=model_name))
-        
-
 
 
 

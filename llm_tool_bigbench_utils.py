@@ -1,3 +1,4 @@
+#llm_tool_bigbench_utils.py
 import os
 import json
 import re
@@ -19,6 +20,9 @@ from transformers import (
     AutoConfig
 )
 # To this:
+import threading
+progress_tracker = {}
+progress_lock = threading.Lock()
 
 try:
     from rouge_score import rouge_scorer
@@ -33,10 +37,11 @@ except ImportError:
 
 disable_caching()
 
-HISTORY_FILE = "evaluation_results/llm/tool/bigbench/history.json"
+# HISTORY_FILE = "evaluation_results/llm/tool/bigbench/history.json"
 
-_evaluation_progress = {}
-_processing_status = {}
+# _evaluation_progress = {}
+# processing_status = {}
+# from app import evaluation_progress, processing_status
 
 STANDARD_EVAL_STAGES = [
     "Initializing model and tokenizer...",
@@ -46,52 +51,52 @@ STANDARD_EVAL_STAGES = [
     "Finalizing and saving results..."
 ]
 
+
 def update_standard_progress(model_name, stage, message):
-    """Update progress for standard evaluation with proper synchronization."""
+    """Update progress for standard evaluation with thread safety."""
     progress_data = {
         'stage': stage,
         'message': message,
         'timestamp': datetime.now().isoformat()
     }
     
-    # Store locally first
-    _evaluation_progress[model_name] = progress_data
+    # Update local progress tracker with thread safety
+    with progress_lock:
+        if model_name not in progress_tracker:
+            progress_tracker[model_name] = {}
+        progress_tracker[model_name].update(progress_data)
     
-    # Try to update app module - this is the key fix
+    # Also try to update app module if available (optional, non-critical)
     try:
-        import sys
-        if 'app' in sys.modules:
-            app = sys.modules['app']
-            if hasattr(app, 'evaluation_progress'):
-                app.evaluation_progress[model_name] = progress_data
-            if hasattr(app, 'processing_status'):
-                # Update processing status based on stage
-                if stage == -1:
-                    app.processing_status[model_name] = "error"
-                elif stage >= 5:
-                    app.processing_status[model_name] = "complete"
-                else:
-                    app.processing_status[model_name] = "processing"
-            print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+        import app
+        app.evaluation_progress[model_name] = progress_data
+        
+        # Update processing status based on stage
+        if stage == -1:
+            app.processing_status[model_name] = "error"
+        elif stage >= 5:
+            app.processing_status[model_name] = "complete"
         else:
-            print(f"📊 Progress Update (app module not found) - {model_name}: Stage {stage} - {message}")
-    except Exception as e:
-        print(f"Failed to update app progress: {e}")
-        print(f"📊 Progress Update (local fallback) - {model_name}: Stage {stage} - {message}")
-
-def get_progress(model_name):
-    """Get progress for a model with proper fallback."""
-    try:
-        import sys
-        if 'app' in sys.modules:
-            app = sys.modules['app']
-            if hasattr(app, 'evaluation_progress') and model_name in app.evaluation_progress:
-                return app.evaluation_progress[model_name]
+            app.processing_status[model_name] = "processing"
     except:
+        # Silently fail - local tracking is the primary mechanism
         pass
     
-    # Fallback to local storage
-    return _evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
+    print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+
+
+
+def get_progress(model_name):
+    """Get progress for a model with thread safety."""
+    with progress_lock:
+        return progress_tracker.get(model_name, {'stage': 0, 'message': 'Not started'})
+
+def clear_progress(model_name):
+    """Clear progress tracking for a specific model."""
+    with progress_lock:
+        if model_name in progress_tracker:
+            del progress_tracker[model_name]
+    print(f"🧹 Cleared progress tracking for {model_name}")
 
 
 # --------------------- ADVANCED METRICS --------------------- #
@@ -276,10 +281,15 @@ def evaluate_example(prediction: str, target: str, task_type: str, metrics: Adva
     
     return results
 
-# --------------------- IMPROVED GENERATION --------------------- #
 def generate_response(model, tokenizer, input_text: str, task_type: str, max_new_tokens: int = 128) -> str:
-    """Task-aware response generation."""
-    device = next(model.parameters()).device
+    """Task-aware response generation with better device handling."""
+    
+    # Get device from model parameters, with fallback
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        device = torch.device("cpu")
+        print("⚠️ Could not determine model device, using CPU")
     
     # Ensure input_text is a string
     if not isinstance(input_text, str):
@@ -305,10 +315,39 @@ def generate_response(model, tokenizer, input_text: str, task_type: str, max_new
         })
     
     try:
-        inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=1024).to(device)
+        # Tokenize input with proper error handling
+        inputs = tokenizer(
+            input_text, 
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True, 
+            max_length=1024
+        )
+        
+        # Move inputs to the same device as model
+        try:
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+        except Exception as device_error:
+            print(f"⚠️ Could not move inputs to {device}, keeping on CPU: {device_error}")
+            # Keep inputs on CPU if device movement fails
         
         with torch.no_grad():
-            output_ids = model.generate(**inputs, **gen_params)
+            try:
+                output_ids = model.generate(**inputs, **gen_params)
+            except Exception as gen_error:
+                print(f"⚠️ Generation failed with device {device}, trying CPU: {gen_error}")
+                # Fallback: move everything to CPU
+                if device != torch.device("cpu"):
+                    inputs_cpu = {k: v.cpu() for k, v in inputs.items()}
+                    model_cpu = model.cpu()
+                    output_ids = model_cpu.generate(**inputs_cpu, **gen_params)
+                    # Move model back to original device if possible
+                    try:
+                        model.to(device)
+                    except:
+                        pass
+                else:
+                    raise gen_error
         
         # Extract only the generated part (remove input)
         if hasattr(model, 'config') and 'gpt' in str(type(model)).lower():
@@ -335,16 +374,20 @@ def generate_response(model, tokenizer, input_text: str, task_type: str, max_new
         return response
         
     except Exception as e:
-        print(f"⚠️ Generation failed: {e}")
+        print(f"⚠️ Generation failed completely: {e}")
         return ""
 
-# --------------------- MAIN EVALUATION FUNCTION WITH PROPER PROGRESS SYNC --------------------- #
-def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int = 128, 
+def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 50, max_new_tokens: int = 128, 
                           use_full_bigbench: bool = False):
     """Enhanced evaluation with multiple metrics and proper progress tracking."""
     
+    # If model_path is not provided, use model_name as the path (backward compatibility)
+    if model_path is None:
+        model_path = model_name
+    
     try:
         # Stage 1: Initialize model and tokenizer
+        # Use model_name for progress tracking (not model_path)
         update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -353,37 +396,92 @@ def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int 
         # Initialize metrics
         metrics = AdvancedMetrics()
         
-        # Load model
-        print(f"🔍 Loading model: {model_name}")
+        # Load model using model_path, but track progress with model_name
+        print(f"🔍 Loading model from: {model_path}")
+        print(f"🏷️ Progress tracking key: {model_name}")
         update_standard_progress(model_name, 1, "Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Load tokenizer first - use model_path for actual loading
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
         update_standard_progress(model_name, 1, "Loading model configuration...")
-        config = AutoConfig.from_pretrained(model_name)
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         
-        # Smart model loading
+        # Smart model loading with proper device handling
         update_standard_progress(model_name, 1, "Loading model weights...")
-        if config.architectures:
-            arch = config.architectures[0].lower()
-            if any(name in arch for name in ['seq2seq', 't5', 'bart']):
-                model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-                print("📦 Loaded as Seq2Seq model")
-            elif any(name in arch for name in ['causallm', 'gpt', 'gemma']):
-                model = AutoModelForCausalLM.from_pretrained(model_name)
-                print("📦 Loaded as Causal LM")
+        
+        # Use torch_dtype and device_map for better memory management
+        model_kwargs = {
+            "trust_remote_code": True,
+            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "low_cpu_mem_usage": True,
+        }
+        
+        # Add device mapping for CUDA
+        if torch.cuda.is_available():
+            model_kwargs["device_map"] = "auto"
+        
+        try:
+            if config.architectures:
+                arch = config.architectures[0].lower()
+                if any(name in arch for name in ['seq2seq', 't5', 'bart']):
+                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs)
+                    print("📦 Loaded as Seq2Seq model")
+                elif any(name in arch for name in ['causallm', 'gpt', 'gemma', 'llama']):
+                    model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
+                    print("📦 Loaded as Causal LM")
+                else:
+                    model = AutoModel.from_pretrained(model_path, **model_kwargs)
+                    print("📦 Loaded as generic model")
             else:
-                model = AutoModel.from_pretrained(model_name)
-                print("📦 Loaded as generic model")
-        else:
-            model = AutoModelForCausalLM.from_pretrained(model_name)
-            print("📦 Loaded as Causal LM (fallback)")
+                model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
+                print("📦 Loaded as Causal LM (fallback)")
         
-        model.to(device)
+        except Exception as model_load_error:
+            print(f"⚠️ Failed to load with device_map=auto, trying manual device placement...")
+            # Fallback: load on CPU first, then move to device
+            model_kwargs_cpu = {
+                "trust_remote_code": True,
+                "torch_dtype": torch.float32,
+                "low_cpu_mem_usage": True,
+            }
+            
+            if config.architectures:
+                arch = config.architectures[0].lower()
+                if any(name in arch for name in ['seq2seq', 't5', 'bart']):
+                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs_cpu)
+                elif any(name in arch for name in ['causallm', 'gpt', 'gemma', 'llama']):
+                    model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs_cpu)
+                else:
+                    model = AutoModel.from_pretrained(model_path, **model_kwargs_cpu)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs_cpu)
+            
+            # Manual device placement with proper handling
+            try:
+                if torch.cuda.is_available():
+                    # Check if model has meta tensors
+                    has_meta_tensors = any(param.is_meta for param in model.parameters())
+                    if has_meta_tensors:
+                        print("🔧 Model has meta tensors, using to_empty() method...")
+                        model = model.to_empty(device=device)
+                    else:
+                        print("🔧 Moving model to device normally...")
+                        model = model.to(device)
+                else:
+                    print("🔧 Using CPU device")
+            except Exception as device_error:
+                print(f"⚠️ Device placement error: {device_error}")
+                print("🔧 Keeping model on CPU")
+                device = torch.device("cpu")
+        
+        # Set model to evaluation mode
         model.eval()
+        print(f"✅ Model loaded successfully on {device}")
         
-        # Stage 2: Load benchmark tasks
+        # MOVE TO STAGE 2 IMMEDIATELY AFTER MODEL IS LOADED
         update_standard_progress(model_name, 2, STANDARD_EVAL_STAGES[1])
         
         # Get tasks
@@ -409,16 +507,16 @@ def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int 
         task_names = sorted(task_names)
         print(f"📘 Loaded {len(task_names)} unique tasks")
         
-        # Stage 3: Running evaluation on tasks
+        # MOVE TO STAGE 3 AFTER TASKS ARE LOADED
         update_standard_progress(model_name, 3, STANDARD_EVAL_STAGES[2])
         
-        # Evaluation loop
+        # Rest of the evaluation loop remains the same, but continue using model_name for progress
         all_results = []
         task_type_results = defaultdict(list)
         total_tasks = len(task_names)
         
         for task_idx, task_name in enumerate(task_names):
-            # Update progress within stage 3 - this is the key fix
+            # Update progress within stage 3
             progress_percent = int((task_idx / total_tasks) * 100)
             progress_msg = f"Running evaluation on tasks... ({task_idx + 1}/{total_tasks}) [{progress_percent}%] - {task_name[:30]}..."
             update_standard_progress(model_name, 3, progress_msg)
@@ -445,7 +543,7 @@ def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int 
                         example_progress = f"Task {task_idx + 1}/{total_tasks}: Processing example {i + 1}/{num_examples}"
                         update_standard_progress(model_name, 3, example_progress)
                     
-                    # Safe decoding with error handling
+                    # Rest of the example processing remains the same...
                     try:
                         input_text = vocab.vocabulary.decode(example["inputs"].numpy())
                         if not isinstance(input_text, str):
@@ -514,7 +612,7 @@ def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int 
             except Exception as e:
                 print(f"❌ Failed to evaluate task '{task_name}': {e}")
         
-        # Stage 4: Aggregating results
+        # MOVE TO STAGE 4 AFTER ALL TASKS ARE PROCESSED
         update_standard_progress(model_name, 4, STANDARD_EVAL_STAGES[3])
         
         # Overall summary
@@ -530,26 +628,25 @@ def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int 
         if overall_scores:
             print(f"OVERALL: {np.mean(overall_scores):.3f} ± {np.std(overall_scores):.3f}")
         
-        # Stage 5: Finalizing and saving results
+        # MOVE TO STAGE 5 BEFORE SAVING
         update_standard_progress(model_name, 5, STANDARD_EVAL_STAGES[4])
         
-        # Save results
+        # Save results - use model_name for storage key
         _save_enhanced_results(model_name, all_results, task_type_results)
         
-        # Mark as complete
+        # MARK AS COMPLETE (STAGE 6)
         update_standard_progress(model_name, 6, "Evaluation completed successfully!")
         
         return all_results
     
     except Exception as e:
-        # Mark as error
+        # Mark as error - use model_name for progress tracking
         error_msg = f"Evaluation failed: {str(e)}"
         update_standard_progress(model_name, -1, error_msg)
         raise e
 
-
-def _save_enhanced_results(model_path: str, results: List[Dict], task_type_results: Dict):
-    """Save enhanced results with summary statistics."""
+def _save_enhanced_results(model_name: str, results: List[Dict], task_type_results: Dict):
+    """Save current results only - no history tracking."""
     
     summary = {}
     for task_type, scores in task_type_results.items():
@@ -571,188 +668,79 @@ def _save_enhanced_results(model_path: str, results: List[Dict], task_type_resul
         }
     
     entry = {
-        "model_path": model_path,
+        "model_path": model_name,  # Use model_name instead of model_path for consistency
         "summary": summary,
         "detailed_results": results,
         "timestamp": datetime.now().isoformat(),
         "num_tasks": len(results)
     }
     
-    # Load existing history
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                history = json.load(f)
-        except json.JSONDecodeError:
-            history = []
-    else:
-        history = []
-    
-    history.insert(0, entry)
-    
-    # Save
-    os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f, indent=2)
-    
-    print(f"💾 Results saved to {HISTORY_FILE}")
-
-    # Save to allbenchmarkhistory.json with correct structure and run numbering
-    allbenchhistory_file = "evaluation_results/llm/allbenchmarkhistory.json"
-    
-    # Load existing history
-    allbenchhistory_data = []
-    if os.path.exists(allbenchhistory_file):
-        try:
-            with open(allbenchhistory_file, 'r') as f:
-                allbenchhistory_data = json.load(f)
-        except:
-            allbenchhistory_data = []
-    
-    # Find the highest run number for this model
-    model_runs = [entry.get('run', 0) for entry in allbenchhistory_data 
-                  if entry.get('model_path') == model_path]
-    next_run = max(model_runs) + 1 if model_runs else 1
-    
-    # Convert score to percentage for consistency with the template
-    benchmark_percentage = benchmark_mean * 100
-    
-    # Create entry with correct structure that matches your desired format
-    allbench_new_entry = {
-        'model_path': model_path,
-        'benchmark': 'BIG-Bench',        
-        'average': benchmark_percentage,
-        'run': next_run
-    }
-    
-    allbenchhistory_data.append(allbench_new_entry)
-
-    # Save back to file
-    os.makedirs("evaluation_results/llm", exist_ok=True)
-    with open(allbenchhistory_file, 'w') as f:
-        json.dump(allbenchhistory_data, f, indent=2)
-    
-    print(f"💾 Benchmark history saved with run number: {next_run}")
-
-
-def save_benchmark_result(model_name, results, benchmark_name='BIG-Bench', timestamp=None):
-    """Save benchmark results to allbenchmarkhistory.json with correct structure and run numbering"""
-    if timestamp is None:
-        timestamp = datetime.now().isoformat()
-    
-    history_file = "evaluation_results/llm/allbenchmarkhistory.json"
-    
-    # Load existing history
-    history_data = []
-    if os.path.exists(history_file):
-        try:
-            with open(history_file, 'r') as f:
-                history_data = json.load(f)
-        except:
-            history_data = []
-    
-    # Find the highest run number for this model and benchmark combination
-    model_benchmark_runs = [entry.get('run', 0) for entry in history_data 
-                           if entry.get('model_path') == model_name and 
-                              entry.get('benchmark') == benchmark_name]
-    next_run = max(model_benchmark_runs) + 1 if model_benchmark_runs else 1
-    
-    # Handle different result types
-    if isinstance(results, dict):
-        # If results is a dict, look for average or calculate from scores
-        average = results.get('average', 0)
-        if average == 0 and 'scores' in results:
-            benchmark_scores = [v for v in results['scores'].values() if isinstance(v, (int, float))]
-            average = sum(benchmark_scores) / len(benchmark_scores) if benchmark_scores else 0
-    else:
-        # If results is a single score
-        average = results
-    
-    # Create new entry with correct structure
-    new_entry = {
-        'model_path': model_name,
-        'benchmark': benchmark_name,
-        'average': average,
-        'run': next_run
-    }
-    
-    # Add to history
-    history_data.append(new_entry)
-    
-    # Save back to file
-    os.makedirs("evaluation_results/llm", exist_ok=True)
-    with open(history_file, 'w') as f:
-        json.dump(history_data, f, indent=2)
-    
-    print(f"💾 Benchmark result saved with run number: {next_run}")
-
-def get_history(model_name=None):
-    if not os.path.exists(HISTORY_FILE):
-        return []
-
-    try:
-        with open(HISTORY_FILE, "r") as f:
-            data = json.load(f)
-    except json.JSONDecodeError:
-        return []
-
-    if model_name:
-        return [entry for entry in data if model_name in entry["model_path"]]
-    return data
-
-def run_evaluation_in_background(model_name, model_path, eval_params):
-    """Enhanced background evaluation with proper progress tracking and error handling."""
-    
-    # Set initial status
+    # Store in app's current_results instead of file
     try:
         import sys
         if 'app' in sys.modules:
             app = sys.modules['app']
-            app.processing_status[model_name] = "processing"
+            # Use model_name directly as the key
+            app.current_results[model_name] = [entry]  # Store as list for template compatibility
+            print(f"💾 Results stored in memory for {model_name}")
+        else:
+            print(f"💾 App module not found, results not stored")
+    except Exception as e:
+        print(f"Failed to store results in app: {e}")
+
+
+
+def run_evaluation_in_background(model_name, model_path, eval_params):
+    """Enhanced background evaluation with local progress tracking."""
+    
+    # Initialize progress locally
+    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
+    
+    # Also try to set app status (optional)
+    try:
+        import app
+        app.processing_status[model_name] = "processing"
     except:
         pass
-    
-    # Set initial progress
-    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
 
     def background_task():
         try:
-            # The run_evaluation function now handles all progress updates internally
+            # Run the evaluation
             result = run_evaluation(
-                model_name=model_path,
+                model_name=model_name,  # Use model_name for progress tracking
+                model_path=model_path,  # Use model_path for loading
                 num_examples=eval_params.get('num_examples', 25),
                 max_new_tokens=eval_params.get('max_tokens', 128),
                 use_full_bigbench=eval_params.get('full_benchmark', False)
             )
 
             # Mark as complete
+            update_standard_progress(model_name, 6, 'Evaluation completed successfully!')
+            
+            # Also try to update app status (optional)
             try:
-                import sys
-                if 'app' in sys.modules:
-                    app = sys.modules['app']
-                    app.processing_status[model_name] = "complete"
+                import app
+                app.processing_status[model_name] = "complete"
             except:
                 pass
 
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"Error during evaluation: {e}")
+            print(f"❌ Error during evaluation: {e}")
             print(f"Full traceback: {error_details}")
             
             # Mark as error
+            update_standard_progress(model_name, -1, f"Error: {str(e)}")
+            
+            # Also try to update app status (optional)
             try:
-                import sys
-                if 'app' in sys.modules:
-                    app = sys.modules['app']
-                    app.processing_status[model_name] = "error"
+                import app
+                app.processing_status[model_name] = "error"
             except:
                 pass
-                
-            update_standard_progress(model_name, -1, f"Error: {str(e)}")
 
     threading.Thread(target=background_task, daemon=True).start()
-
 
 def extract_score_from_results(results):
     """Extract a score from various result formats."""
