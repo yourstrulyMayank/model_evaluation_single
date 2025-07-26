@@ -3,7 +3,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 import os
 import threading
 import json
-import datetime
+from datetime import datetime
 from io import BytesIO
 import base64
 import pandas as pd
@@ -12,12 +12,11 @@ import os
 import traceback
 import logging
 import openpyxl
-from datetime import datetime
 from collections import defaultdict
 import contextlib
 import threading
 import uuid
-# from weasyprint import HTML, CSS
+from weasyprint import HTML, CSS
 
 from llm_tool_bigbench_utils import ( get_history,
                                         run_evaluation_in_background,
@@ -72,7 +71,22 @@ function setBenchmark(type, index) {
 </script>
 '''
 
+STANDARD_EVAL_STAGES = [
+    "Initializing model and tokenizer...",
+    "Loading benchmark tasks...",
+    "Running evaluation on tasks...",
+    "Aggregating results...",
+    "Finalizing and saving results..."
+]
 
+def update_standard_progress(model_name, stage, message):
+    """Update progress for standard evaluation."""
+    evaluation_progress[model_name] = {
+        'stage': stage,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    }
+    print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
 
 
 @app.route('/')
@@ -205,7 +219,7 @@ def evaluate_llm(model_name):
         flash(f"Unknown model: {model_name}")
         return redirect(url_for('index'))
 
-    model_path = os.path.join(model_base_path, model_folder, model_name)
+    model_path = os.path.join(model_base_path, model_folder)
     if not os.path.exists(model_path):
         return f"Model '{model_name}' not found in '{model_folder}'.", 404
 
@@ -216,17 +230,33 @@ def evaluate_llm(model_name):
     }
 
     run_evaluation_in_background(model_name, model_path, eval_params)
+    # Set initial progress
+    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
     return render_template('loading.html', model_name=model_name)
 
 
 @app.route('/check_status/<model_name>')
 def check_status(model_name):
     status = processing_status.get(model_name, "not_started")
-    progress = evaluation_progress.get(model_name, {})
+    progress = evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
+    
+    # If no progress in app, check the utils module
+    if progress['stage'] == 0:
+        try:
+            from llm_tool_bigbench_utils import get_progress
+            utils_progress = get_progress(model_name)
+            if utils_progress['stage'] > 0:
+                progress = utils_progress
+        except:
+            pass
+    
+    # Debug logging
+    print(f"Status check for {model_name}: status={status}, progress={progress}")
     
     return jsonify({
         "status": status,
-        "progress": progress
+        "progress": progress,
+        "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/history/<category>/<model_name>')

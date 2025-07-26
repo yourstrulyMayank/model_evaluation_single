@@ -6,7 +6,6 @@ tensorflow-text>=2.6
 tensorflow>=2.6
 absl-py
 black>=21.6b0
-./bleurt/bleurt-b610120347ef22b494b6d69b4316e303f5932516.zip
 datasets
 editdistance
 immutabledict

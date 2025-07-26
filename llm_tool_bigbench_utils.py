@@ -1,16 +1,16 @@
 import os
 import json
 import re
-import datetime
+from datetime import datetime
 import random
 from typing import Dict, List, Any, Tuple
 from collections import defaultdict
 import threading
 import torch
-# import seqio
+import seqio
 import numpy as np
 from datasets import disable_caching
-# from bigbench.bbseqio import tasks, vocabs
+from bigbench.bbseqio import tasks, vocabs
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -18,8 +18,8 @@ from transformers import (
     AutoModel,
     AutoConfig
 )
+# To this:
 
-# Advanced metrics
 try:
     from rouge_score import rouge_scorer
     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -35,8 +35,64 @@ disable_caching()
 
 HISTORY_FILE = "evaluation_results/llm/tool/bigbench/history.json"
 
-processing_status = {}  # Track per-model status
-evaluation_progress = {}  # Track detailed progress
+_evaluation_progress = {}
+_processing_status = {}
+
+STANDARD_EVAL_STAGES = [
+    "Initializing model and tokenizer...",
+    "Loading benchmark tasks...",
+    "Running evaluation on tasks...",
+    "Aggregating results...",
+    "Finalizing and saving results..."
+]
+
+def update_standard_progress(model_name, stage, message):
+    """Update progress for standard evaluation with proper synchronization."""
+    progress_data = {
+        'stage': stage,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Store locally first
+    _evaluation_progress[model_name] = progress_data
+    
+    # Try to update app module - this is the key fix
+    try:
+        import sys
+        if 'app' in sys.modules:
+            app = sys.modules['app']
+            if hasattr(app, 'evaluation_progress'):
+                app.evaluation_progress[model_name] = progress_data
+            if hasattr(app, 'processing_status'):
+                # Update processing status based on stage
+                if stage == -1:
+                    app.processing_status[model_name] = "error"
+                elif stage >= 5:
+                    app.processing_status[model_name] = "complete"
+                else:
+                    app.processing_status[model_name] = "processing"
+            print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+        else:
+            print(f"📊 Progress Update (app module not found) - {model_name}: Stage {stage} - {message}")
+    except Exception as e:
+        print(f"Failed to update app progress: {e}")
+        print(f"📊 Progress Update (local fallback) - {model_name}: Stage {stage} - {message}")
+
+def get_progress(model_name):
+    """Get progress for a model with proper fallback."""
+    try:
+        import sys
+        if 'app' in sys.modules:
+            app = sys.modules['app']
+            if hasattr(app, 'evaluation_progress') and model_name in app.evaluation_progress:
+                return app.evaluation_progress[model_name]
+    except:
+        pass
+    
+    # Fallback to local storage
+    return _evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
+
 
 # --------------------- ADVANCED METRICS --------------------- #
 class AdvancedMetrics:
@@ -47,10 +103,22 @@ class AdvancedMetrics:
     
     def exact_match(self, prediction: str, target: str) -> float:
         """Normalized exact match."""
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         return float(self.normalize(prediction) == self.normalize(target))
     
     def fuzzy_match(self, prediction: str, target: str, threshold: float = 0.8) -> float:
         """Fuzzy string matching using character overlap."""
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         pred_norm = self.normalize(prediction)
         target_norm = self.normalize(target)
         
@@ -67,6 +135,12 @@ class AdvancedMetrics:
         if not ADVANCED_METRICS_AVAILABLE:
             return {}
         
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         try:
             scores = self.rouge_scorer.score(target, prediction)
             return {
@@ -82,6 +156,12 @@ class AdvancedMetrics:
         if not ADVANCED_METRICS_AVAILABLE:
             return 0.0
         
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         try:
             pred_tokens = prediction.lower().split()
             target_tokens = [target.lower().split()]  # BLEU expects list of reference lists
@@ -95,6 +175,12 @@ class AdvancedMetrics:
     
     def token_f1(self, prediction: str, target: str) -> float:
         """Token-level F1 score."""
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         pred_tokens = set(prediction.lower().split())
         target_tokens = set(target.lower().split())
         
@@ -114,6 +200,12 @@ class AdvancedMetrics:
     
     def multiple_choice_accuracy(self, prediction: str, target: str, choices: List[str] = None) -> float:
         """Specialized accuracy for multiple choice questions."""
+        # Ensure both inputs are strings
+        if not isinstance(prediction, str):
+            prediction = str(prediction) if prediction is not None else ""
+        if not isinstance(target, str):
+            target = str(target) if target is not None else ""
+        
         # Extract first letter/number if it looks like A/B/C/D or 1/2/3/4
         pred_match = re.search(r'^[A-Za-z0-9]', prediction.strip())
         target_match = re.search(r'^[A-Za-z0-9]', target.strip())
@@ -125,6 +217,10 @@ class AdvancedMetrics:
     
     def normalize(self, text: str) -> str:
         """Enhanced text normalization."""
+        # Ensure text is a string
+        if not isinstance(text, str):
+            text = str(text) if text is not None else ""
+        
         # Remove extra whitespace and convert to lowercase
         text = re.sub(r'\s+', ' ', text.lower().strip())
         # Remove common punctuation that doesn't affect meaning
@@ -150,6 +246,12 @@ def get_task_type(task_name: str) -> str:
 def evaluate_example(prediction: str, target: str, task_type: str, metrics: AdvancedMetrics) -> Dict[str, float]:
     """Comprehensive evaluation of a single example."""
     results = {}
+    
+    # Ensure prediction and target are strings
+    if not isinstance(prediction, str):
+        prediction = str(prediction) if prediction is not None else ""
+    if not isinstance(target, str):
+        target = str(target) if target is not None else ""
     
     # Always compute exact match
     results['exact_match'] = metrics.exact_match(prediction, target)
@@ -178,6 +280,10 @@ def evaluate_example(prediction: str, target: str, task_type: str, metrics: Adva
 def generate_response(model, tokenizer, input_text: str, task_type: str, max_new_tokens: int = 128) -> str:
     """Task-aware response generation."""
     device = next(model.parameters()).device
+    
+    # Ensure input_text is a string
+    if not isinstance(input_text, str):
+        input_text = str(input_text) if input_text is not None else ""
     
     # Task-specific generation parameters
     gen_params = {
@@ -211,7 +317,13 @@ def generate_response(model, tokenizer, input_text: str, task_type: str, max_new
         else:
             generated_ids = output_ids[0]
         
-        response = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+        
+        # Ensure response is a string
+        if not isinstance(response, str):
+            response = str(response) if response is not None else ""
+        
+        response = response.strip()
         
         # Clean up response
         if task_type == 'multiple_choice':
@@ -226,162 +338,214 @@ def generate_response(model, tokenizer, input_text: str, task_type: str, max_new
         print(f"⚠️ Generation failed: {e}")
         return ""
 
-# --------------------- MAIN EVALUATION FUNCTION --------------------- #
+# --------------------- MAIN EVALUATION FUNCTION WITH PROPER PROGRESS SYNC --------------------- #
 def run_evaluation(model_name: str, num_examples: int = 50, max_new_tokens: int = 128, 
                           use_full_bigbench: bool = False):
-    """Enhanced evaluation with multiple metrics and better task handling."""
+    """Enhanced evaluation with multiple metrics and proper progress tracking."""
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🔧 Device: {device}")
-    
-    # Initialize metrics
-    metrics = AdvancedMetrics()
-    
-    # Load model
-    print(f"🔍 Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    config = AutoConfig.from_pretrained(model_name)
-    
-    # Smart model loading
-    if config.architectures:
-        arch = config.architectures[0].lower()
-        if any(name in arch for name in ['seq2seq', 't5', 'bart']):
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-            print("📦 Loaded as Seq2Seq model")
-        elif any(name in arch for name in ['causallm', 'gpt', 'gemma']):
-            model = AutoModelForCausalLM.from_pretrained(model_name)
-            print("📦 Loaded as Causal LM")
+    try:
+        # Stage 1: Initialize model and tokenizer
+        update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"🔧 Device: {device}")
+        
+        # Initialize metrics
+        metrics = AdvancedMetrics()
+        
+        # Load model
+        print(f"🔍 Loading model: {model_name}")
+        update_standard_progress(model_name, 1, "Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        update_standard_progress(model_name, 1, "Loading model configuration...")
+        config = AutoConfig.from_pretrained(model_name)
+        
+        # Smart model loading
+        update_standard_progress(model_name, 1, "Loading model weights...")
+        if config.architectures:
+            arch = config.architectures[0].lower()
+            if any(name in arch for name in ['seq2seq', 't5', 'bart']):
+                model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+                print("📦 Loaded as Seq2Seq model")
+            elif any(name in arch for name in ['causallm', 'gpt', 'gemma']):
+                model = AutoModelForCausalLM.from_pretrained(model_name)
+                print("📦 Loaded as Causal LM")
+            else:
+                model = AutoModel.from_pretrained(model_name)
+                print("📦 Loaded as generic model")
         else:
-            model = AutoModel.from_pretrained(model_name)
-            print("📦 Loaded as generic model")
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        print("📦 Loaded as Causal LM (fallback)")
-    
-    model.to(device)
-    model.eval()
-    
-    # Get tasks
-    vocab = vocabs.ALL_VOCABS["t5_default"]
-    
-    if use_full_bigbench:
-        # Use more comprehensive task list
-        mixture_names = [
-            "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples",
-            "bigbench:bigbench_lite_v1.mix.t5_default_vocab.1_shot.1024_examples",
-        ]
-    else:
-        mixture_names = [
-            "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
-        ]
-    
-    task_names = set()
-    for mix_name in mixture_names:
-        try:
-            mix = seqio.get_mixture_or_task(mix_name)
-            task_names.update([t.name for t in mix.tasks])
-        except Exception as e:
-            print(f"⚠️ Failed to load mixture: {mix_name}: {e}")
-    
-    task_names = sorted(task_names)
-    print(f"📘 Loaded {len(task_names)} unique tasks")
-    
-    # Evaluation loop
-    all_results = []
-    task_type_results = defaultdict(list)
-    
-    for task_name in task_names:
-        print(f"\n🔍 Evaluating task: {task_name}")
-        print("=" * 100)
+            model = AutoModelForCausalLM.from_pretrained(model_name)
+            print("📦 Loaded as Causal LM (fallback)")
         
-        task_type = get_task_type(task_name)
-        print(f"📋 Task type: {task_type}")
+        model.to(device)
+        model.eval()
         
-        try:
-            task = seqio.get_mixture_or_task(task_name)
-            dataset = task.get_dataset(split="validation")
+        # Stage 2: Load benchmark tasks
+        update_standard_progress(model_name, 2, STANDARD_EVAL_STAGES[1])
+        
+        # Get tasks
+        vocab = vocabs.ALL_VOCABS["t5_default"]
+        
+        if use_full_bigbench:
+            mixture_names = [
+                "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
+            ]
+        else:
+            mixture_names = [
+                "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
+            ]
+        
+        task_names = set()
+        for mix_name in mixture_names:
+            try:
+                mix = seqio.get_mixture_or_task(mix_name)
+                task_names.update([t.name for t in mix.tasks])
+            except Exception as e:
+                print(f"⚠️ Failed to load mixture: {mix_name}: {e}")
+        
+        task_names = sorted(task_names)
+        print(f"📘 Loaded {len(task_names)} unique tasks")
+        
+        # Stage 3: Running evaluation on tasks
+        update_standard_progress(model_name, 3, STANDARD_EVAL_STAGES[2])
+        
+        # Evaluation loop
+        all_results = []
+        task_type_results = defaultdict(list)
+        total_tasks = len(task_names)
+        
+        for task_idx, task_name in enumerate(task_names):
+            # Update progress within stage 3 - this is the key fix
+            progress_percent = int((task_idx / total_tasks) * 100)
+            progress_msg = f"Running evaluation on tasks... ({task_idx + 1}/{total_tasks}) [{progress_percent}%] - {task_name[:30]}..."
+            update_standard_progress(model_name, 3, progress_msg)
             
-            task_metrics = defaultdict(list)
-            samples = []
+            print(f"\n🔍 Evaluating task: {task_name}")
+            print("=" * 100)
             
-            for i, example in enumerate(dataset):
-                if i >= num_examples:
-                    break
+            task_type = get_task_type(task_name)
+            print(f"📋 Task type: {task_type}")
+            
+            try:
+                task = seqio.get_mixture_or_task(task_name)
+                dataset = task.get_dataset(split="validation")
                 
-                input_text = vocab.vocabulary.decode(example["inputs"].numpy())
-                target_text = vocab.vocabulary.decode(example["targets"].numpy()).strip()
+                task_metrics = defaultdict(list)
+                samples = []
                 
-                # Generate response
-                prediction = generate_response(model, tokenizer, input_text, task_type, max_new_tokens)
+                for i, example in enumerate(dataset):
+                    if i >= num_examples:
+                        break
+                    
+                    # Update sub-progress for examples within task
+                    if i % 5 == 0:  # Update every 5 examples to avoid spam
+                        example_progress = f"Task {task_idx + 1}/{total_tasks}: Processing example {i + 1}/{num_examples}"
+                        update_standard_progress(model_name, 3, example_progress)
+                    
+                    # Safe decoding with error handling
+                    try:
+                        input_text = vocab.vocabulary.decode(example["inputs"].numpy())
+                        if not isinstance(input_text, str):
+                            input_text = str(input_text)
+                    except Exception as e:
+                        print(f"⚠️ Failed to decode input for example {i}: {e}")
+                        continue
+                    
+                    try:
+                        target_text = vocab.vocabulary.decode(example["targets"].numpy())
+                        if not isinstance(target_text, str):
+                            target_text = str(target_text)
+                        target_text = target_text.strip()
+                    except Exception as e:
+                        print(f"⚠️ Failed to decode target for example {i}: {e}")
+                        continue
+                    
+                    # Generate response
+                    prediction = generate_response(model, tokenizer, input_text, task_type, max_new_tokens)
+                    
+                    # Evaluate
+                    eval_results = evaluate_example(prediction, target_text, task_type, metrics)
+                    
+                    # Store results
+                    for metric_name, score in eval_results.items():
+                        task_metrics[metric_name].append(score)
+                    
+                    sample_data = {
+                        "example_number": i + 1,
+                        "input": input_text[:200] + "..." if len(input_text) > 200 else input_text,
+                        "expected": target_text,
+                        "generated": prediction,
+                        "metrics": eval_results,
+                        "task_type": task_type
+                    }
+                    samples.append(sample_data)
+                    
+                    # Print progress
+                    if i % 10 == 0 or i < 5:
+                        print(f"🔹 Example {i+1}: Primary={eval_results['primary_metric']:.3f}")
                 
-                # Evaluate
-                eval_results = evaluate_example(prediction, target_text, task_type, metrics)
+                # Aggregate task results
+                task_summary = {}
+                for metric_name, scores in task_metrics.items():
+                    task_summary[metric_name] = {
+                        'mean': np.mean(scores),
+                        'std': np.std(scores),
+                        'count': len(scores)
+                    }
                 
-                # Store results
-                for metric_name, score in eval_results.items():
-                    task_metrics[metric_name].append(score)
+                print(f"\n📊 Task Results for {task_name}:")
+                print(f"   Primary Metric: {task_summary.get('primary_metric', {}).get('mean', 0):.3f}")
+                print(f"   Exact Match: {task_summary.get('exact_match', {}).get('mean', 0):.3f}")
                 
-                sample_data = {
-                    "example_number": i + 1,
-                    "input": input_text[:200] + "..." if len(input_text) > 200 else input_text,
-                    "expected": target_text,
-                    "generated": prediction,
-                    "metrics": eval_results,
-                    "task_type": task_type
+                task_result = {
+                    "task": task_name,
+                    "task_type": task_type,
+                    "summary": task_summary,
+                    "samples": samples[:5],  # Store only first 5 samples to save space
+                    "timestamp": datetime.now().isoformat()
                 }
-                samples.append(sample_data)
                 
-                # Print progress
-                if i % 10 == 0 or i < 5:
-                    print(f"🔹 Example {i+1}: Primary={eval_results['primary_metric']:.3f}")
-            
-            # Aggregate task results
-            task_summary = {}
-            for metric_name, scores in task_metrics.items():
-                task_summary[metric_name] = {
-                    'mean': np.mean(scores),
-                    'std': np.std(scores),
-                    'count': len(scores)
-                }
-            
-            print(f"\n📊 Task Results for {task_name}:")
-            print(f"   Primary Metric: {task_summary.get('primary_metric', {}).get('mean', 0):.3f}")
-            print(f"   Exact Match: {task_summary.get('exact_match', {}).get('mean', 0):.3f}")
-            
-            task_result = {
-                "task": task_name,
-                "task_type": task_type,
-                "summary": task_summary,
-                "samples": samples[:5],  # Store only first 5 samples to save space
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-            
-            all_results.append(task_result)
-            task_type_results[task_type].append(task_summary.get('primary_metric', {}).get('mean', 0))
-            
-        except Exception as e:
-            print(f"❌ Failed to evaluate task '{task_name}': {e}")
+                all_results.append(task_result)
+                task_type_results[task_type].append(task_summary.get('primary_metric', {}).get('mean', 0))
+                
+            except Exception as e:
+                print(f"❌ Failed to evaluate task '{task_name}': {e}")
+        
+        # Stage 4: Aggregating results
+        update_standard_progress(model_name, 4, STANDARD_EVAL_STAGES[3])
+        
+        # Overall summary
+        print(f"\n" + "="*50)
+        print(f"📈 EVALUATION SUMMARY")
+        print(f"="*50)
+        
+        for task_type, scores in task_type_results.items():
+            if scores:
+                print(f"{task_type.upper()}: {np.mean(scores):.3f} ± {np.std(scores):.3f} ({len(scores)} tasks)")
+        
+        overall_scores = [s for scores in task_type_results.values() for s in scores]
+        if overall_scores:
+            print(f"OVERALL: {np.mean(overall_scores):.3f} ± {np.std(overall_scores):.3f}")
+        
+        # Stage 5: Finalizing and saving results
+        update_standard_progress(model_name, 5, STANDARD_EVAL_STAGES[4])
+        
+        # Save results
+        _save_enhanced_results(model_name, all_results, task_type_results)
+        
+        # Mark as complete
+        update_standard_progress(model_name, 6, "Evaluation completed successfully!")
+        
+        return all_results
     
-    # Overall summary
-    print(f"\n" + "="*50)
-    print(f"📈 EVALUATION SUMMARY")
-    print(f"="*50)
-    
-    for task_type, scores in task_type_results.items():
-        if scores:
-            print(f"{task_type.upper()}: {np.mean(scores):.3f} ± {np.std(scores):.3f} ({len(scores)} tasks)")
-    
-    overall_scores = [s for scores in task_type_results.values() for s in scores]
-    if overall_scores:
-        print(f"OVERALL: {np.mean(overall_scores):.3f} ± {np.std(overall_scores):.3f}")
-    
-    # Save results
-    _save_enhanced_results(model_name, all_results, task_type_results)
-    return all_results
-
+    except Exception as e:
+        # Mark as error
+        error_msg = f"Evaluation failed: {str(e)}"
+        update_standard_progress(model_name, -1, error_msg)
+        raise e
 
 
 def _save_enhanced_results(model_path: str, results: List[Dict], task_type_results: Dict):
@@ -410,7 +574,7 @@ def _save_enhanced_results(model_path: str, results: List[Dict], task_type_resul
         "model_path": model_path,
         "summary": summary,
         "detailed_results": results,
-        "timestamp": datetime.datetime.now().isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "num_tasks": len(results)
     }
     
@@ -434,7 +598,7 @@ def _save_enhanced_results(model_path: str, results: List[Dict], task_type_resul
     print(f"💾 Results saved to {HISTORY_FILE}")
 
     # Save to allbenchmarkhistory.json with correct structure and run numbering
-    allbenchhistory_file = "evaluation_results/allbenchmarkhistory.json"
+    allbenchhistory_file = "evaluation_results/llm/allbenchmarkhistory.json"
     
     # Load existing history
     allbenchhistory_data = []
@@ -464,7 +628,7 @@ def _save_enhanced_results(model_path: str, results: List[Dict], task_type_resul
     allbenchhistory_data.append(allbench_new_entry)
 
     # Save back to file
-    os.makedirs("evaluation_results", exist_ok=True)
+    os.makedirs("evaluation_results/llm", exist_ok=True)
     with open(allbenchhistory_file, 'w') as f:
         json.dump(allbenchhistory_data, f, indent=2)
     
@@ -474,9 +638,9 @@ def _save_enhanced_results(model_path: str, results: List[Dict], task_type_resul
 def save_benchmark_result(model_name, results, benchmark_name='BIG-Bench', timestamp=None):
     """Save benchmark results to allbenchmarkhistory.json with correct structure and run numbering"""
     if timestamp is None:
-        timestamp = datetime.datetime.now().isoformat()
+        timestamp = datetime.now().isoformat()
     
-    history_file = "evaluation_results/allbenchmarkhistory.json"
+    history_file = "evaluation_results/llm/allbenchmarkhistory.json"
     
     # Load existing history
     history_data = []
@@ -516,7 +680,7 @@ def save_benchmark_result(model_name, results, benchmark_name='BIG-Bench', times
     history_data.append(new_entry)
     
     # Save back to file
-    os.makedirs("evaluation_results", exist_ok=True)
+    os.makedirs("evaluation_results/llm", exist_ok=True)
     with open(history_file, 'w') as f:
         json.dump(history_data, f, indent=2)
     
@@ -536,40 +700,59 @@ def get_history(model_name=None):
         return [entry for entry in data if model_name in entry["model_path"]]
     return data
 
-
 def run_evaluation_in_background(model_name, model_path, eval_params):
-    """Enhanced background evaluation with progress tracking."""
-    processing_status[model_name] = "processing"
-    evaluation_progress[model_name] = {
-        "current_task": "",
-        "completed_tasks": 0,
-        "total_tasks": 0,
-        "progress_percent": 0
-    }
+    """Enhanced background evaluation with proper progress tracking and error handling."""
+    
+    # Set initial status
+    try:
+        import sys
+        if 'app' in sys.modules:
+            app = sys.modules['app']
+            app.processing_status[model_name] = "processing"
+    except:
+        pass
+    
+    # Set initial progress
+    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
 
     def background_task():
         try:
-            # Update progress
-            evaluation_progress[model_name]["current_task"] = "Initializing..."
-            
-            # Run enhanced evaluation
+            # The run_evaluation function now handles all progress updates internally
             result = run_evaluation(
                 model_name=model_path,
                 num_examples=eval_params.get('num_examples', 25),
                 max_new_tokens=eval_params.get('max_tokens', 128),
                 use_full_bigbench=eval_params.get('full_benchmark', False)
             )
-            
-            processing_status[model_name] = "complete"
-            evaluation_progress[model_name]["progress_percent"] = 100
-            evaluation_progress[model_name]["current_task"] = "Completed"
-            
-        except Exception as e:
-            print(f"Error during evaluation: {e}")
-            processing_status[model_name] = "error"
-            evaluation_progress[model_name]["current_task"] = f"Error: {str(e)}"
 
-    threading.Thread(target=background_task).start()
+            # Mark as complete
+            try:
+                import sys
+                if 'app' in sys.modules:
+                    app = sys.modules['app']
+                    app.processing_status[model_name] = "complete"
+            except:
+                pass
+
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Error during evaluation: {e}")
+            print(f"Full traceback: {error_details}")
+            
+            # Mark as error
+            try:
+                import sys
+                if 'app' in sys.modules:
+                    app = sys.modules['app']
+                    app.processing_status[model_name] = "error"
+            except:
+                pass
+                
+            update_standard_progress(model_name, -1, f"Error: {str(e)}")
+
+    threading.Thread(target=background_task, daemon=True).start()
+
 
 def extract_score_from_results(results):
     """Extract a score from various result formats."""
