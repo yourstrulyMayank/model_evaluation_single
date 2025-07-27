@@ -526,7 +526,7 @@ def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 
         mix_name = "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
         mix = seqio.get_mixture_or_task(mix_name)
         task_names = sorted([t.name for t in mix.tasks])
-        task_names = task_names[:2]  # Limit for testing
+        task_names = task_names[:20]  # Limit for testing
         print(f"✅ Loaded {len(task_names)} tasks")
         
         # IMMEDIATELY advance to Stage 3
