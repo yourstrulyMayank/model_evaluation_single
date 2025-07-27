@@ -11,8 +11,51 @@
             line-height: 1.6;
             margin: 0;
             padding: 20px;
-            background-color: #f8f9fa;
+            background-color: #f4f4f4;
             color: #333;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #f4f4f4;
+        }
+
+        header img {
+            height: 75px;
+        }
+
+        header h1 {
+            color: #0071e3;
+            margin: 0;
+            font-size: 2.5rem;
+            font-weight: normal;
+        }
+
+        nav {
+            width: 100%;
+            text-align: left;
+            padding: 5px 5px;
+            background-color: #005bb5;
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+            margin-right: 20px;
+        }
+
+        nav a.greyed {
+            color: #ccc;
+            pointer-events: none;
+        }
+
+        nav a:hover:not(.greyed) {
+            background-color: #0071e3;
+            padding: 5px 10px;
+            border-radius: 4px;
         }
         
         .container {
@@ -277,6 +320,16 @@
     </style>
 </head>
 <body>
+    <header>
+        <img src="/static/infosys.png" alt="Infosys Logo">
+        <h1>Model Evaluation</h1>
+        <img src="/static/ABCBank.png" alt="ABC Bank Logo">
+    </header>
+    
+    <nav>
+        <a href="/">← Back to Home</a>
+    </nav>
+    <br>
     <div class="container">
         <div class="header">
             <h1>{{ model_name }}</h1>
@@ -291,9 +344,7 @@
                 📊 Export JSON Data
             </a>
             
-            <a href="{{ url_for('index') }}" class="btn btn-secondary">
-                ← Back to Models
-            </a>
+            
         </div>
 
         <div class="content">

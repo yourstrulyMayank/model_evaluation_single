@@ -80,42 +80,59 @@ def index():
 
 @app.route('/download_report/<model_name>')
 def download_report(model_name):
-    """Generate PDF report from current results only."""
+    """Generate PDF report with charts and tables from results page."""
     if model_name not in MODELS:
         flash("Model not found.")
         return redirect(url_for('index'))
     
     try:
-        # Get current results only
-        results_data = current_results.get(model_name, [])
+        # Load results from file
+        from llm_tool_bigbench_utils import load_results_from_file
+        results_data = load_results_from_file(model_name)
         
         if not results_data:
             flash("No evaluation results found for this model.")
             return redirect(url_for('analyze', model_name=model_name))
         
-        # Create a comprehensive HTML report
+        latest = results_data[0]
+        
+        # Create comprehensive HTML with charts and styling
         html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
             <title>Evaluation Report - {model_name}</title>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
-                .header {{ text-align: center; margin-bottom: 40px; border-bottom: 2px solid #333; padding-bottom: 20px; }}
-                .summary {{ margin-bottom: 30px; }}
-                .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
-                .summary-card {{ border: 1px solid #ddd; padding: 15px; text-align: center; background: #f9f9f9; }}
-                .score {{ font-size: 2em; font-weight: bold; color: #007bff; }}
-                .task-section {{ margin-bottom: 30px; page-break-inside: avoid; }}
-                .task-header {{ background: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 10px; }}
+                body {{ font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; color: #333; }}
+                .header {{ text-align: center; margin-bottom: 30px; border-bottom: 2px solid #007bff; padding-bottom: 20px; }}
+                .header h1 {{ color: #007bff; margin-bottom: 5px; }}
+                .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+                .summary-card {{ border: 1px solid #ddd; padding: 15px; text-align: center; background: #f8f9fa; border-radius: 8px; }}
+                .summary-card h3 {{ margin-top: 0; color: #495057; font-size: 1.1em; }}
+                .score {{ font-size: 2.2em; font-weight: bold; color: #007bff; margin: 10px 0; }}
+                .details {{ color: #6c757d; font-size: 0.9em; }}
+                .chart-container {{ margin: 30px 0; text-align: center; page-break-inside: avoid; }}
+                .chart-container h3 {{ color: #495057; margin-bottom: 15px; }}
+                .chart-placeholder {{ width: 100%; height: 300px; background: #f8f9fa; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; color: #6c757d; }}
+                .task-section {{ margin-bottom: 25px; page-break-inside: avoid; }}
+                .task-header {{ background: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 10px; border-radius: 0 8px 8px 0; }}
+                .task-header h3 {{ margin: 0; color: #495057; }}
+                .task-type {{ color: #6c757d; font-size: 0.9em; font-weight: normal; }}
                 .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 15px 0; }}
-                .metric-item {{ text-align: center; padding: 10px; background: #f9f9f9; border: 1px solid #ddd; }}
-                .samples-table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-                .samples-table th, .samples-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                .samples-table th {{ background-color: #f5f5f5; }}
-                .code {{ background: #f8f8f8; padding: 5px; font-family: monospace; white-space: pre-wrap; }}
-                @media print {{ body {{ margin: 20px; }} .page-break {{ page-break-before: always; }} }}
+                .metric-item {{ text-align: center; padding: 10px; background: #fff; border: 1px solid #dee2e6; border-radius: 5px; }}
+                .metric-item strong {{ color: #495057; font-size: 0.9em; }}
+                .samples-table {{ width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 0.9em; }}
+                .samples-table th {{ background-color: #007bff; color: white; padding: 8px; text-align: left; }}
+                .samples-table td {{ border: 1px solid #dee2e6; padding: 8px; vertical-align: top; }}
+                .samples-table pre {{ margin: 0; white-space: pre-wrap; word-wrap: break-word; font-size: 0.8em; }}
+                .timestamp {{ color: #6c757d; font-size: 0.9em; margin-top: 20px; text-align: center; }}
+                @media print {{ 
+                    body {{ margin: 15px; }} 
+                    .page-break {{ page-break-before: always; }}
+                    .chart-placeholder {{ height: 200px; }}
+                }}
             </style>
         </head>
         <body>
@@ -126,156 +143,174 @@ def download_report(model_name):
             </div>
         """
         
-        if results_data:
-            latest = results_data[0]
+        if 'summary' in latest and latest['summary']:
+            # Overall Summary Cards
+            html_content += """
+            <div class="summary-grid">
+            """
             
-            # Overall Summary
-            if 'summary' in latest and latest['summary']:
-                html_content += """
-                <div class="summary">
-                    <h2>Performance Summary</h2>
-                    <div class="summary-grid">
+            if 'overall' in latest['summary']:
+                overall = latest['summary']['overall']
+                html_content += f"""
+                <div class="summary-card">
+                    <h3>Overall Performance</h3>
+                    <div class="score">{overall['mean']*100:.1f}%</div>
+                    <div class="details">± {overall['std']*100:.1f}% ({overall['count']} tasks)</div>
+                </div>
                 """
-                
-                if 'overall' in latest['summary']:
-                    overall = latest['summary']['overall']
+            
+            for task_type, stats in latest['summary'].items():
+                if task_type != 'overall':
                     html_content += f"""
                     <div class="summary-card">
-                        <h3>Overall Score</h3>
-                        <div class="score">{overall['mean']*100:.1f}%</div>
-                        <p>± {overall['std']*100:.1f}% ({overall['count']} tasks)</p>
+                        <h3>{task_type.title()}</h3>
+                        <div class="score">{stats['mean']*100:.1f}%</div>
+                        <div class="details">± {stats['std']*100:.1f}% ({stats['count']} tasks)</div>
                     </div>
                     """
+            
+            html_content += "</div>"
+            
+            # Performance Chart Placeholder
+            html_content += """
+            <div class="chart-container">
+                <h3>Performance by Task Type</h3>
+                <div class="chart-placeholder">
+                    <div>
+                        <strong>Performance Summary</strong><br>
+            """
+            
+            for task_type, stats in latest['summary'].items():
+                if task_type != 'overall':
+                    html_content += f"{task_type.title()}: {stats['mean']*100:.1f}%<br>"
+            
+            html_content += """
+                    </div>
+                </div>
+            </div>
+            """
+        
+        # Detailed Task Results
+        if 'detailed_results' in latest:
+            html_content += "<h2 style='color: #495057; border-bottom: 1px solid #dee2e6; padding-bottom: 10px;'>Detailed Task Results</h2>"
+            
+            for i, task_result in enumerate(latest['detailed_results']):
+                if i > 0:
+                    html_content += '<div class="page-break"></div>'
                 
-                for task_type, stats in latest['summary'].items():
-                    if task_type != 'overall':
+                primary_score = task_result.get('summary', {}).get('primary_metric', {}).get('mean', 0)
+                html_content += f"""
+                <div class="task-section">
+                    <div class="task-header">
+                        <h3>{task_result['task']} <span class="task-type">({task_result.get('task_type', 'N/A')})</span></h3>
+                        <p style="margin: 5px 0 0 0;">Primary Score: <strong>{primary_score*100:.1f}%</strong></p>
+                    </div>
+                """
+                
+                # Metrics Grid
+                if 'summary' in task_result:
+                    html_content += '<div class="metrics-grid">'
+                    for metric_name, metric_data in task_result['summary'].items():
                         html_content += f"""
-                        <div class="summary-card">
-                            <h3>{task_type.title()}</h3>
-                            <div class="score">{stats['mean']*100:.1f}%</div>
-                            <p>± {stats['std']*100:.1f}% ({stats['count']} tasks)</p>
+                        <div class="metric-item">
+                            <strong>{metric_name.replace('_', ' ').title()}</strong><br>
+                            {metric_data['mean']:.3f}
                         </div>
                         """
+                    html_content += '</div>'
                 
-                html_content += "</div></div>"
-            
-            # Detailed Results
-            if 'detailed_results' in latest:
-                html_content += "<h2>Detailed Task Results</h2>"
-                
-                for i, task_result in enumerate(latest['detailed_results']):
-                    if i > 0:  # Add page break between tasks for better printing
-                        html_content += '<div class="page-break"></div>'
-                    
-                    primary_score = task_result.get('summary', {}).get('primary_metric', {}).get('mean', 0)
-                    html_content += f"""
-                    <div class="task-section">
-                        <div class="task-header">
-                            <h3>{task_result['task']}</h3>
-                            <p>Type: {task_result.get('task_type', 'N/A')} | Primary Score: {primary_score*100:.1f}%</p>
-                        </div>
+                # Sample Results Table
+                if 'samples' in task_result and task_result['samples']:
+                    html_content += """
+                    <h4 style="color: #495057;">Sample Predictions</h4>
+                    <table class="samples-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 5%">#</th>
+                                <th style="width: 35%">Input</th>
+                                <th style="width: 25%">Generated</th>
+                                <th style="width: 25%">Expected</th>
+                                <th style="width: 10%">Score</th>
+                            </tr>
+                        </thead>
+                        <tbody>
                     """
                     
-                    # Metrics
-                    if 'summary' in task_result:
-                        html_content += '<div class="metrics-grid">'
-                        for metric_name, metric_data in task_result['summary'].items():
-                            html_content += f"""
-                            <div class="metric-item">
-                                <strong>{metric_name.replace('_', ' ').title()}</strong><br>
-                                {metric_data['mean']:.3f}
-                            </div>
-                            """
-                        html_content += '</div>'
-                    
-                    # Sample results
-                    if 'samples' in task_result and task_result['samples']:
-                        html_content += """
-                        <h4>Sample Predictions</h4>
-                        <table class="samples-table">
-                            <tr>
-                                <th>Example</th>
-                                <th>Input</th>
-                                <th>Generated</th>
-                                <th>Expected</th>
-                                <th>Score</th>
-                            </tr>
+                    for sample in task_result['samples'][:3]:
+                        score = sample.get('metrics', {}).get('primary_metric', 0)
+                        input_text = str(sample.get('input', ''))[:150] + ('...' if len(str(sample.get('input', ''))) > 150 else '')
+                        html_content += f"""
+                        <tr>
+                            <td>{sample.get('example_number', 'N/A')}</td>
+                            <td><pre>{input_text}</pre></td>
+                            <td><pre>{sample.get('generated', '')}</pre></td>
+                            <td><pre>{sample.get('expected', '')}</pre></td>
+                            <td style="text-align: center;"><strong>{score:.2f}</strong></td>
+                        </tr>
                         """
-                        
-                        for sample in task_result['samples'][:3]:  # Show first 3 samples
-                            score = sample.get('metrics', {}).get('primary_metric', 0)
-                            html_content += f"""
-                            <tr>
-                                <td>{sample.get('example_number', 'N/A')}</td>
-                                <td><div class="code">{sample.get('input', '')[:200]}{'...' if len(str(sample.get('input', ''))) > 200 else ''}</div></td>
-                                <td><div class="code">{sample.get('generated', '')}</div></td>
-                                <td><div class="code">{sample.get('expected', '')}</div></td>
-                                <td>{score:.2f}</td>
-                            </tr>
-                            """
-                        
-                        html_content += '</table>'
                     
-                    html_content += '</div>'
+                    html_content += '</tbody></table>'
+                
+                html_content += '</div>'
         
         html_content += f"""
-            <div class="summary" style="margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px;">
-                <p><strong>Report generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                <p><strong>Total tasks evaluated:</strong> {len(latest.get('detailed_results', []))}</p>
+            <div class="timestamp">
+                <strong>Report generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br>
+                <strong>Total tasks evaluated:</strong> {len(latest.get('detailed_results', []))}
             </div>
         </body>
         </html>
         """
         
-        # Try to generate PDF if weasyprint is available
+        # Try to generate PDF
         try:
-            from weasyprint import HTML
             pdf_buffer = BytesIO()
             HTML(string=html_content).write_pdf(pdf_buffer)
             pdf_buffer.seek(0)
             
             response = make_response(pdf_buffer.getvalue())
             response.headers['Content-Type'] = 'application/pdf'
-            response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_evaluation_report.pdf"'
+            response.headers['Content-Disposition'] = f'attachment; filename="{model_name.replace(" ", "_")}_evaluation_report.pdf"'
             return response
             
         except ImportError:
-            # Fallback: return HTML if weasyprint not available
+            # Fallback: return HTML
             response = make_response(html_content)
             response.headers['Content-Type'] = 'text/html'
-            response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_evaluation_report.html"'
+            response.headers['Content-Disposition'] = f'attachment; filename="{model_name.replace(" ", "_")}_evaluation_report.html"'
             return response
         
     except Exception as e:
         print(f"Error generating report: {e}")
         flash(f"Error generating report: {str(e)}")
         return redirect(url_for('analyze', model_name=model_name))
-
+        
 @app.route('/export_json/<model_name>')
 def export_json(model_name):
-    """Export current results as JSON file."""
+    """Export evaluation_results.json file directly."""
     if model_name not in MODELS:
         flash("Model not found.")
         return redirect(url_for('index'))
     
     try:
-        results_data = current_results.get(model_name, [])
+        from llm_tool_bigbench_utils import RESULTS_FILE
         
-        if not results_data:
-            flash("No evaluation results found for this model.")
+        # Check if results file exists
+        if not os.path.exists(RESULTS_FILE):
+            flash("No evaluation results file found.")
             return redirect(url_for('analyze', model_name=model_name))
         
-        # Create JSON response
-        response = make_response(json.dumps(results_data, indent=2))
-        response.headers['Content-Type'] = 'application/json'
-        response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_results.json"'
-        
-        return response
+        # Send the file directly
+        return send_file(
+            RESULTS_FILE,
+            as_attachment=True,
+            download_name=f"evaluation_results_{model_name.replace(' ', '_')}.json",
+            mimetype='application/json'
+        )
         
     except Exception as e:
         flash(f"Error exporting JSON: {str(e)}")
         return redirect(url_for('analyze', model_name=model_name))
-
     
 @app.route('/evaluate_model/<model_name>')
 def evaluate(model_name):
