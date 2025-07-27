@@ -21,8 +21,10 @@ from transformers import (
 )
 # To this:
 import threading
+from collections import defaultdict
 progress_tracker = {}
 progress_lock = threading.Lock()
+task_completion_tracker = defaultdict(set)
 
 try:
     from rouge_score import rouge_scorer
@@ -52,37 +54,64 @@ STANDARD_EVAL_STAGES = [
 ]
 
 
-def update_standard_progress(model_name, stage, message):
-    """Update progress for standard evaluation with thread safety."""
-    progress_data = {
-        'stage': stage,
-        'message': message,
-        'timestamp': datetime.now().isoformat()
-    }
+# def update_standard_progress(model_name, stage, message, task_details=None):
+#     """Update progress for standard evaluation with enhanced task tracking."""
+#     progress_data = {
+#         'stage': stage,
+#         'message': message,
+#         'timestamp': datetime.now().isoformat()
+#     }
     
-    # Update local progress tracker with thread safety
-    with progress_lock:
-        if model_name not in progress_tracker:
-            progress_tracker[model_name] = {}
-        progress_tracker[model_name].update(progress_data)
+#     # Add task-specific details if provided
+#     if task_details:
+#         progress_data.update(task_details)
     
-    # Also try to update app module if available (optional, non-critical)
-    try:
-        import app
-        app.evaluation_progress[model_name] = progress_data
+#     # Update local progress tracker with thread safety
+#     with progress_lock:
+#         if model_name not in progress_tracker:
+#             progress_tracker[model_name] = {}
+#         progress_tracker[model_name].update(progress_data)
+    
+#     # Also try to update app module if available (optional, non-critical)
+#     try:
+#         import app
+#         app.evaluation_progress[model_name] = progress_data
         
-        # Update processing status based on stage
-        if stage == -1:
-            app.processing_status[model_name] = "error"
-        elif stage >= 5:
-            app.processing_status[model_name] = "complete"
-        else:
-            app.processing_status[model_name] = "processing"
-    except:
-        # Silently fail - local tracking is the primary mechanism
-        pass
+#         # Update processing status based on stage
+#         if stage == -1:
+#             app.processing_status[model_name] = "error"
+#         elif stage >= 5:
+#             app.processing_status[model_name] = "complete"
+#         else:
+#             app.processing_status[model_name] = "processing"
+#     except:
+#         # Silently fail - local tracking is the primary mechanism
+#         pass
     
-    print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+#     print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
+
+def update_task_progress(model_name, task_name, task_index, total_tasks, status="processing"):
+    """Update progress for individual task completion."""
+    with progress_lock:
+        if status == "completed":
+            task_completion_tracker[model_name].add(task_name)
+        
+        completed_count = len(task_completion_tracker[model_name])
+        
+        # Create a more stable progress message
+        if status == "processing":
+            message = f"Evaluating tasks... ({completed_count}/{total_tasks} completed) - Current: {task_name[:40]}..."
+        else:
+            message = f"Evaluating tasks... ({completed_count}/{total_tasks} completed)"
+        
+        task_details = {
+            'current_task': task_name,
+            'completed_tasks': completed_count,
+            'total_tasks': total_tasks,
+            'completion_percentage': int((completed_count / total_tasks) * 100)
+        }
+        
+        update_standard_progress(model_name, 3, message, task_details)
 
 
 
@@ -379,201 +408,99 @@ def generate_response(model, tokenizer, input_text: str, task_type: str, max_new
 
 def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 50, max_new_tokens: int = 128, 
                           use_full_bigbench: bool = False):
-    """Enhanced evaluation with multiple metrics and proper progress tracking."""
+    """Sequential evaluation with immediate progress updates."""
     
-    # If model_path is not provided, use model_name as the path (backward compatibility)
     if model_path is None:
         model_path = model_name
     
     try:
-        # Stage 1: Initialize model and tokenizer
-        # Use model_name for progress tracking (not model_path)
-        update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
+        # Force CPU and disable GPU warnings
+        os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+        import warnings
+        warnings.filterwarnings('ignore')
         
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"🔧 Device: {device}")
+        # Stage 1: Load model
+        update_standard_progress(model_name, 1, "Loading model and tokenizer...")
+        print(f"📊 Stage 1: Loading model for {model_name}")
         
-        # Initialize metrics
+        device = torch.device("cpu")
         metrics = AdvancedMetrics()
         
-        # Load model using model_path, but track progress with model_name
-        print(f"🔍 Loading model from: {model_path}")
-        print(f"🏷️ Progress tracking key: {model_name}")
-        update_standard_progress(model_name, 1, "Loading tokenizer...")
-        
-        # Load tokenizer first - use model_path for actual loading
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
-        update_standard_progress(model_name, 1, "Loading model configuration...")
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         
-        # Smart model loading with proper device handling
-        update_standard_progress(model_name, 1, "Loading model weights...")
-        
-        # Use torch_dtype and device_map for better memory management
         model_kwargs = {
             "trust_remote_code": True,
-            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "torch_dtype": torch.float32,
             "low_cpu_mem_usage": True,
         }
         
-        # Add device mapping for CUDA
-        if torch.cuda.is_available():
-            model_kwargs["device_map"] = "auto"
-        
-        try:
-            if config.architectures:
-                arch = config.architectures[0].lower()
-                if any(name in arch for name in ['seq2seq', 't5', 'bart']):
-                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs)
-                    print("📦 Loaded as Seq2Seq model")
-                elif any(name in arch for name in ['causallm', 'gpt', 'gemma', 'llama']):
-                    model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
-                    print("📦 Loaded as Causal LM")
-                else:
-                    model = AutoModel.from_pretrained(model_path, **model_kwargs)
-                    print("📦 Loaded as generic model")
+        if config.architectures:
+            arch = config.architectures[0].lower()
+            if any(name in arch for name in ['seq2seq', 't5', 'bart']):
+                model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs)
             else:
                 model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
-                print("📦 Loaded as Causal LM (fallback)")
-        
-        except Exception as model_load_error:
-            print(f"⚠️ Failed to load with device_map=auto, trying manual device placement...")
-            # Fallback: load on CPU first, then move to device
-            model_kwargs_cpu = {
-                "trust_remote_code": True,
-                "torch_dtype": torch.float32,
-                "low_cpu_mem_usage": True,
-            }
-            
-            if config.architectures:
-                arch = config.architectures[0].lower()
-                if any(name in arch for name in ['seq2seq', 't5', 'bart']):
-                    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs_cpu)
-                elif any(name in arch for name in ['causallm', 'gpt', 'gemma', 'llama']):
-                    model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs_cpu)
-                else:
-                    model = AutoModel.from_pretrained(model_path, **model_kwargs_cpu)
-            else:
-                model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs_cpu)
-            
-            # Manual device placement with proper handling
-            try:
-                if torch.cuda.is_available():
-                    # Check if model has meta tensors
-                    has_meta_tensors = any(param.is_meta for param in model.parameters())
-                    if has_meta_tensors:
-                        print("🔧 Model has meta tensors, using to_empty() method...")
-                        model = model.to_empty(device=device)
-                    else:
-                        print("🔧 Moving model to device normally...")
-                        model = model.to(device)
-                else:
-                    print("🔧 Using CPU device")
-            except Exception as device_error:
-                print(f"⚠️ Device placement error: {device_error}")
-                print("🔧 Keeping model on CPU")
-                device = torch.device("cpu")
-        
-        # Set model to evaluation mode
-        model.eval()
-        print(f"✅ Model loaded successfully on {device}")
-        
-        # MOVE TO STAGE 2 IMMEDIATELY AFTER MODEL IS LOADED
-        update_standard_progress(model_name, 2, STANDARD_EVAL_STAGES[1])
-        
-        # Get tasks
-        vocab = vocabs.ALL_VOCABS["t5_default"]
-        
-        if use_full_bigbench:
-            mixture_names = [
-                "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
-            ]
         else:
-            mixture_names = [
-                "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
-            ]
+            model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
         
-        task_names = set()
-        for mix_name in mixture_names:
-            try:
-                mix = seqio.get_mixture_or_task(mix_name)
-                task_names.update([t.name for t in mix.tasks])
-            except Exception as e:
-                print(f"⚠️ Failed to load mixture: {mix_name}: {e}")
+        model = model.to(device)
+        model.eval()
+        print(f"✅ Model loaded on {device}")
         
-        task_names = sorted(task_names)
-        print(f"📘 Loaded {len(task_names)} unique tasks")
+        # IMMEDIATELY advance to Stage 2
+        update_standard_progress(model_name, 2, "Loading benchmark tasks...")
+        print(f"📊 Stage 2: Loading tasks for {model_name}")
         
-        # MOVE TO STAGE 3 AFTER TASKS ARE LOADED
-        update_standard_progress(model_name, 3, STANDARD_EVAL_STAGES[2])
+        vocab = vocabs.ALL_VOCABS["t5_default"]
+        mix_name = "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
+        mix = seqio.get_mixture_or_task(mix_name)
+        task_names = sorted([t.name for t in mix.tasks])
+        task_names = task_names[:2]  # Limit for testing
+        print(f"✅ Loaded {len(task_names)} tasks")
         
-        # Rest of the evaluation loop remains the same, but continue using model_name for progress
+        # IMMEDIATELY advance to Stage 3
+        update_standard_progress(model_name, 3, f"Running evaluation on {len(task_names)} tasks...")
+        print(f"📊 Stage 3: Starting evaluation for {model_name}")
+        
         all_results = []
         task_type_results = defaultdict(list)
-        total_tasks = len(task_names)
         
+        # Sequential task processing - NO THREADING
         for task_idx, task_name in enumerate(task_names):
-            # Update progress within stage 3
-            progress_percent = int((task_idx / total_tasks) * 100)
-            progress_msg = f"Running evaluation on tasks... ({task_idx + 1}/{total_tasks}) [{progress_percent}%] - {task_name[:30]}..."
-            update_standard_progress(model_name, 3, progress_msg)
-            
-            print(f"\n🔍 Evaluating task: {task_name}")
-            print("=" * 100)
+            current_task_msg = f"Evaluating task {task_idx + 1}/{len(task_names)}: {task_name[:30]}..."
+            update_standard_progress(model_name, 3, current_task_msg)
+            print(f"🔍 {current_task_msg}")
             
             task_type = get_task_type(task_name)
-            print(f"📋 Task type: {task_type}")
+            task = seqio.get_mixture_or_task(task_name)
+            dataset = task.get_dataset(split="validation")
             
-            try:
-                task = seqio.get_mixture_or_task(task_name)
-                dataset = task.get_dataset(split="validation")
+            task_metrics = defaultdict(list)
+            samples = []
+            
+            # Sequential example processing
+            for i, example in enumerate(dataset):
+                if i >= num_examples:
+                    break
                 
-                task_metrics = defaultdict(list)
-                samples = []
-                
-                for i, example in enumerate(dataset):
-                    if i >= num_examples:
-                        break
+                try:
+                    input_text = vocab.vocabulary.decode(example["inputs"].numpy())
+                    target_text = vocab.vocabulary.decode(example["targets"].numpy()).strip()
                     
-                    # Update sub-progress for examples within task
-                    if i % 5 == 0:  # Update every 5 examples to avoid spam
-                        example_progress = f"Task {task_idx + 1}/{total_tasks}: Processing example {i + 1}/{num_examples}"
-                        update_standard_progress(model_name, 3, example_progress)
-                    
-                    # Rest of the example processing remains the same...
-                    try:
-                        input_text = vocab.vocabulary.decode(example["inputs"].numpy())
-                        if not isinstance(input_text, str):
-                            input_text = str(input_text)
-                    except Exception as e:
-                        print(f"⚠️ Failed to decode input for example {i}: {e}")
-                        continue
-                    
-                    try:
-                        target_text = vocab.vocabulary.decode(example["targets"].numpy())
-                        if not isinstance(target_text, str):
-                            target_text = str(target_text)
-                        target_text = target_text.strip()
-                    except Exception as e:
-                        print(f"⚠️ Failed to decode target for example {i}: {e}")
-                        continue
-                    
-                    # Generate response
                     prediction = generate_response(model, tokenizer, input_text, task_type, max_new_tokens)
-                    
-                    # Evaluate
                     eval_results = evaluate_example(prediction, target_text, task_type, metrics)
                     
-                    # Store results
                     for metric_name, score in eval_results.items():
                         task_metrics[metric_name].append(score)
                     
                     sample_data = {
                         "example_number": i + 1,
-                        "input": input_text[:200] + "..." if len(input_text) > 200 else input_text,
+                        "input": input_text[:200],
                         "expected": target_text,
                         "generated": prediction,
                         "metrics": eval_results,
@@ -581,72 +508,165 @@ def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 
                     }
                     samples.append(sample_data)
                     
-                    # Print progress
-                    if i % 10 == 0 or i < 5:
-                        print(f"🔹 Example {i+1}: Primary={eval_results['primary_metric']:.3f}")
-                
-                # Aggregate task results
-                task_summary = {}
-                for metric_name, scores in task_metrics.items():
+                except Exception as e:
+                    print(f"⚠️ Skipping example {i}: {e}")
+                    continue
+            
+            # Process task results
+            task_summary = {}
+            for metric_name, scores in task_metrics.items():
+                if scores:
                     task_summary[metric_name] = {
                         'mean': np.mean(scores),
                         'std': np.std(scores),
                         'count': len(scores)
                     }
-                
-                print(f"\n📊 Task Results for {task_name}:")
-                print(f"   Primary Metric: {task_summary.get('primary_metric', {}).get('mean', 0):.3f}")
-                print(f"   Exact Match: {task_summary.get('exact_match', {}).get('mean', 0):.3f}")
-                
-                task_result = {
-                    "task": task_name,
-                    "task_type": task_type,
-                    "summary": task_summary,
-                    "samples": samples[:5],  # Store only first 5 samples to save space
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                all_results.append(task_result)
-                task_type_results[task_type].append(task_summary.get('primary_metric', {}).get('mean', 0))
-                
-            except Exception as e:
-                print(f"❌ Failed to evaluate task '{task_name}': {e}")
+            
+            task_result = {
+                "task": task_name,
+                "task_type": task_type,
+                "summary": task_summary,
+                "samples": samples[:5],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            all_results.append(task_result)
+            if 'primary_metric' in task_summary:
+                task_type_results[task_type].append(task_summary['primary_metric']['mean'])
+            
+            print(f"✅ Completed task {task_idx + 1}/{len(task_names)}")
         
-        # MOVE TO STAGE 4 AFTER ALL TASKS ARE PROCESSED
-        update_standard_progress(model_name, 4, STANDARD_EVAL_STAGES[3])
+        # IMMEDIATELY advance to Stage 4 after all tasks complete
+        update_standard_progress(model_name, 4, "Aggregating results...")
+        print(f"📊 Stage 4: Aggregating results for {model_name}")
         
-        # Overall summary
-        print(f"\n" + "="*50)
-        print(f"📈 EVALUATION SUMMARY")
-        print(f"="*50)
-        
+        summary = {}
         for task_type, scores in task_type_results.items():
             if scores:
-                print(f"{task_type.upper()}: {np.mean(scores):.3f} ± {np.std(scores):.3f} ({len(scores)} tasks)")
+                summary[task_type] = {
+                    'mean': float(np.mean(scores)),
+                    'std': float(np.std(scores)),
+                    'count': len(scores)
+                }
         
         overall_scores = [s for scores in task_type_results.values() for s in scores]
         if overall_scores:
-            print(f"OVERALL: {np.mean(overall_scores):.3f} ± {np.std(overall_scores):.3f}")
+            summary['overall'] = {
+                'mean': float(np.mean(overall_scores)),
+                'std': float(np.std(overall_scores)),
+                'count': len(overall_scores)
+            }
         
-        # MOVE TO STAGE 5 BEFORE SAVING
-        update_standard_progress(model_name, 5, STANDARD_EVAL_STAGES[4])
+        entry = {
+            "model_path": model_name,
+            "summary": summary,
+            "detailed_results": all_results,
+            "timestamp": datetime.now().isoformat(),
+            "num_tasks": len(all_results),
+            "status": "completed"
+        }
         
-        # Save results - use model_name for storage key
-        _save_enhanced_results(model_name, all_results, task_type_results)
+        # IMMEDIATELY advance to Stage 5
+        update_standard_progress(model_name, 5, "Saving results...")
+        print(f"📊 Stage 5: Saving results for {model_name}")
         
-        # MARK AS COMPLETE (STAGE 6)
-        update_standard_progress(model_name, 6, "Evaluation completed successfully!")
+        # Save to app
+        try:
+            import app
+            app.current_results[model_name] = [entry]
+            print(f"✅ Results saved for {model_name}")
+        except Exception as e:
+            print(f"⚠️ Could not save to app: {e}")
+        
+        # IMMEDIATELY advance to Stage 6 (completion)
+        update_standard_progress(model_name, 6, "Evaluation completed!")
+        print(f"📊 Stage 6: Evaluation completed for {model_name}")
+        
+        # Ensure app status is updated
+        try:
+            import app
+            app.processing_status[model_name] = "complete"
+            print(f"✅ Marked {model_name} as complete")
+        except:
+            pass
         
         return all_results
     
     except Exception as e:
-        # Mark as error - use model_name for progress tracking
-        error_msg = f"Evaluation failed: {str(e)}"
-        update_standard_progress(model_name, -1, error_msg)
+        update_standard_progress(model_name, -1, f"Error: {str(e)}")
+        print(f"❌ Evaluation failed for {model_name}: {e}")
+        try:
+            import app
+            app.processing_status[model_name] = "error"
+        except:
+            pass
         raise e
 
+def run_evaluation_in_background(model_name, model_path, eval_params):
+    """Run evaluation in background thread - but evaluation itself is sequential."""
+    
+    print(f"🚀 Starting evaluation for {model_name}")
+    
+    # Set initial status
+    try:
+        import app
+        app.processing_status[model_name] = "processing"
+        if model_name in app.current_results:
+            del app.current_results[model_name]
+    except:
+        pass
+
+    def background_task():
+        try:
+            # Run SEQUENTIAL evaluation (no internal threading)
+            run_evaluation(
+                model_name=model_name,
+                model_path=model_path,
+                num_examples=eval_params.get('num_examples', 5),
+                max_new_tokens=eval_params.get('max_tokens', 128),
+                use_full_bigbench=eval_params.get('full_benchmark', False)
+            )
+                
+        except Exception as e:
+            print(f"❌ Background evaluation failed for {model_name}: {e}")
+
+    # Only this part uses threading - the evaluation itself is sequential
+    threading.Thread(target=background_task, daemon=True).start()
+
+def update_standard_progress(model_name, stage, message, task_details=None):
+    """Simple, immediate progress update."""
+    progress_data = {
+        'stage': stage,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    if task_details:
+        progress_data.update(task_details)
+    
+    # Update local progress tracker
+    with progress_lock:
+        progress_tracker[model_name] = progress_data
+    
+    # Update app immediately
+    try:
+        import app
+        app.evaluation_progress[model_name] = progress_data
+        
+        # Update status based on stage
+        if stage == -1:
+            app.processing_status[model_name] = "error"
+        elif stage >= 6:  # Changed from 5 to 6
+            app.processing_status[model_name] = "complete"
+        else:
+            app.processing_status[model_name] = "processing"
+            
+        print(f"📊 Progress updated: {model_name} -> Stage {stage}: {message}")
+    except Exception as e:
+        print(f"⚠️ Failed to update app progress: {e}")
+
 def _save_enhanced_results(model_name: str, results: List[Dict], task_type_results: Dict):
-    """Save current results only - no history tracking."""
+    """Save current results only AFTER evaluation is complete."""
     
     summary = {}
     for task_type, scores in task_type_results.items():
@@ -668,79 +688,27 @@ def _save_enhanced_results(model_name: str, results: List[Dict], task_type_resul
         }
     
     entry = {
-        "model_path": model_name,  # Use model_name instead of model_path for consistency
+        "model_path": model_name,
         "summary": summary,
         "detailed_results": results,
         "timestamp": datetime.now().isoformat(),
-        "num_tasks": len(results)
+        "num_tasks": len(results),
+        "status": "completed"  # Add explicit completion status
     }
     
-    # Store in app's current_results instead of file
+    # Store in app's current_results ONLY when evaluation is complete
     try:
         import sys
         if 'app' in sys.modules:
             app = sys.modules['app']
             # Use model_name directly as the key
-            app.current_results[model_name] = [entry]  # Store as list for template compatibility
-            print(f"💾 Results stored in memory for {model_name}")
+            app.current_results[model_name] = [entry]
+            print(f"💾 FINAL Results stored in memory for {model_name}")
         else:
             print(f"💾 App module not found, results not stored")
     except Exception as e:
         print(f"Failed to store results in app: {e}")
 
-
-
-def run_evaluation_in_background(model_name, model_path, eval_params):
-    """Enhanced background evaluation with local progress tracking."""
-    
-    # Initialize progress locally
-    update_standard_progress(model_name, 1, STANDARD_EVAL_STAGES[0])
-    
-    # Also try to set app status (optional)
-    try:
-        import app
-        app.processing_status[model_name] = "processing"
-    except:
-        pass
-
-    def background_task():
-        try:
-            # Run the evaluation
-            result = run_evaluation(
-                model_name=model_name,  # Use model_name for progress tracking
-                model_path=model_path,  # Use model_path for loading
-                num_examples=eval_params.get('num_examples', 25),
-                max_new_tokens=eval_params.get('max_tokens', 128),
-                use_full_bigbench=eval_params.get('full_benchmark', False)
-            )
-
-            # Mark as complete
-            update_standard_progress(model_name, 6, 'Evaluation completed successfully!')
-            
-            # Also try to update app status (optional)
-            try:
-                import app
-                app.processing_status[model_name] = "complete"
-            except:
-                pass
-
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"❌ Error during evaluation: {e}")
-            print(f"Full traceback: {error_details}")
-            
-            # Mark as error
-            update_standard_progress(model_name, -1, f"Error: {str(e)}")
-            
-            # Also try to update app status (optional)
-            try:
-                import app
-                app.processing_status[model_name] = "error"
-            except:
-                pass
-
-    threading.Thread(target=background_task, daemon=True).start()
 
 def extract_score_from_results(results):
     """Extract a score from various result formats."""

@@ -273,49 +273,61 @@
         ];
 
         function updateProgressStage(stage) {
+            console.log('Updating progress stage to:', stage); // Debug log
+            
             // Reset all stages
             for (let i = 1; i <= 5; i++) {
                 const stageEl = document.getElementById(`stage-${i}`);
-                stageEl.classList.remove('active', 'completed');
+                if (stageEl) {
+                    stageEl.classList.remove('active', 'completed');
+                }
             }
             
             // If evaluation is complete
             if (stage >= 6) {
                 for (let i = 1; i <= 5; i++) {
-                    document.getElementById(`stage-${i}`).classList.add('completed');
+                    const stageEl = document.getElementById(`stage-${i}`);
+                    if (stageEl) {
+                        stageEl.classList.add('completed');
+                    }
                 }
                 return;
             }
             
-            // Mark completed stages
+            // Mark completed stages (stages before current one)
             for (let i = 1; i < stage; i++) {
-                document.getElementById(`stage-${i}`).classList.add('completed');
+                const stageEl = document.getElementById(`stage-${i}`);
+                if (stageEl) {
+                    stageEl.classList.add('completed');
+                }
             }
             
             // Mark current active stage
             if (stage <= 5 && stage > 0) {
-                document.getElementById(`stage-${stage}`).classList.add('active');
+                const stageEl = document.getElementById(`stage-${stage}`);
+                if (stageEl) {
+                    stageEl.classList.add('active');
+                }
             }
         }
 
         function startEvaluation() {
             const modelName = "{{ model_name }}";
             
-            // Start evaluation via AJAX POST
-            fetch(`/start_evaluation/${modelName}`, {
+            // Start evaluation via AJAX POST - using the correct endpoint
+            fetch(`/evaluate_llm/${modelName}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 }
             })
-            .then(response => response.json())
-            .then(data => {
-                console.log('Evaluation started:', data);
-                if (data.status === 'started') {
-                    // Start polling for progress
+            .then(response => {
+                if (response.ok) {
+                    console.log('Evaluation started successfully');
+                    // Start polling for progress immediately
                     checkStatus();
                 } else {
-                    document.getElementById('status-text').textContent = '❌ Failed to start evaluation: ' + (data.error || 'Unknown error');
+                    throw new Error(`HTTP ${response.status}`);
                 }
             })
             .catch(error => {
@@ -324,36 +336,71 @@
             });
         }
 
+        // function checkStatus() {
+        //     const modelName = "{{ model_name }}";
+            
+        //     fetch(`/check_status/${modelName}`)
+        //         .then(response => response.json())
+        //         .then(data => {
+        //             console.log('Status update:', data);
+                    
+        //             if (data.status === "complete") {
+        //                 updateProgressStage(6);
+        //                 document.getElementById('status-text').textContent = '🎉 Evaluation completed successfully!';
+        //                 setTimeout(() => {
+        //                     window.location.href = `/results/${modelName}`;
+        //                 }, 2000);
+        //             } else if (data.status === "error") {
+        //                 document.getElementById('status-text').textContent = '❌ ' + (data.progress.message || 'An error occurred during evaluation.');
+        //             } else {
+        //                 // Update progress
+        //                 if (data.progress && data.progress.stage) {
+        //                     updateProgressStage(data.progress.stage);
+        //                     const message = data.progress.message || stages[data.progress.stage-1] || 'Processing...';
+        //                     document.getElementById('status-text').textContent = message;
+        //                 }
+        //                 // Continue polling
+        //                 setTimeout(checkStatus, 2000);
+        //             }
+        //         })
+        //         .catch(error => {
+        //             console.error('Error checking status:', error);
+        //             setTimeout(checkStatus, 3000); // Retry with longer delay
+        //         });
+        // }
         function checkStatus() {
             const modelName = "{{ model_name }}";
             
             fetch(`/check_status/${modelName}`)
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Status update:', data);
+                    console.log('Status check:', data);
                     
-                    if (data.status === "complete") {
+                    if (data.progress && data.progress.stage !== undefined) {
+                        updateProgressStage(data.progress.stage);
+                        const message = data.progress.message || stages[data.progress.stage-1] || 'Processing...';
+                        document.getElementById('status-text').textContent = message;
+                    }
+                    
+                    // Only redirect to results if BOTH status is complete AND results exist
+                    if (data.status === 'complete' && data.has_results) {
+                        console.log('Evaluation completed with results, redirecting...');
                         updateProgressStage(6);
                         document.getElementById('status-text').textContent = '🎉 Evaluation completed successfully!';
                         setTimeout(() => {
                             window.location.href = `/results/${modelName}`;
                         }, 2000);
-                    } else if (data.status === "error") {
+                    } else if (data.status === 'error') {
+                        console.log('Evaluation failed');
                         document.getElementById('status-text').textContent = '❌ ' + (data.progress.message || 'An error occurred during evaluation.');
                     } else {
-                        // Update progress
-                        if (data.progress && data.progress.stage) {
-                            updateProgressStage(data.progress.stage);
-                            const message = data.progress.message || stages[data.progress.stage-1] || 'Processing...';
-                            document.getElementById('status-text').textContent = message;
-                        }
                         // Continue polling
                         setTimeout(checkStatus, 2000);
                     }
                 })
                 .catch(error => {
                     console.error('Error checking status:', error);
-                    setTimeout(checkStatus, 3000); // Retry with longer delay
+                    setTimeout(checkStatus, 3000);
                 });
         }
 

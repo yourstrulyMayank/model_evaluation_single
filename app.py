@@ -24,18 +24,12 @@ from llm_tool_bigbench_utils import ( run_evaluation_in_background,
 
 import numpy as np
 
-
-
-
 # Add logging configuration
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-
 
 app = Flask(__name__)
 
@@ -58,8 +52,6 @@ MODELS = {
 }
 current_results = {}
 
-# Create folders
-
 
 js_function = '''
 <script>
@@ -81,39 +73,6 @@ STANDARD_EVAL_STAGES = [
     "Finalizing and saving results..."
 ]
 
-# def update_standard_progress(model_name, stage, message):
-#     """Update progress for standard evaluation with proper synchronization."""
-#     progress_data = {
-#         'stage': stage,
-#         'message': message,
-#         'timestamp': datetime.now().isoformat()
-#     }
-    
-#     # Store locally first
-#     _evaluation_progress[model_name] = progress_data
-    
-#     # Try to update app module - this is the key fix
-#     try:
-#         import sys
-#         if 'app' in sys.modules:
-#             app = sys.modules['app']
-#             if hasattr(app, 'evaluation_progress'):
-#                 app.evaluation_progress[model_name] = progress_data
-#             if hasattr(app, 'processing_status'):
-#                 # Update processing status based on stage
-#                 if stage == -1:
-#                     app.processing_status[model_name] = "error"
-#                 elif stage >= 6:
-#                     app.processing_status[model_name] = "complete"
-#                 else:
-#                     app.processing_status[model_name] = "processing"
-#             print(f"📊 Standard Progress Update - {model_name}: Stage {stage} - {message}")
-#         else:
-#             print(f"📊 Progress Update (app module not found) - {model_name}: Stage {stage} - {message}")
-#     except Exception as e:
-#         print(f"Failed to update app progress: {e}")
-#         print(f"📊 Progress Update (local fallback) - {model_name}: Stage {stage} - {message}")
-
 
 @app.route('/')
 def index():
@@ -127,16 +86,6 @@ def download_report(model_name):
         return redirect(url_for('index'))
     
     try:
-        from jinja2 import Template
-        PDF_AVAILABLE = True
-    except ImportError:
-        PDF_AVAILABLE = False
-    
-    if not PDF_AVAILABLE:
-        flash("PDF generation not available. Please install weasyprint.")
-        return redirect(url_for('analyze', model_name=model_name))
-    
-    try:
         # Get current results only
         results_data = current_results.get(model_name, [])
         
@@ -144,26 +93,162 @@ def download_report(model_name):
             flash("No evaluation results found for this model.")
             return redirect(url_for('analyze', model_name=model_name))
         
-        # Render HTML template for PDF
-        html_content = render_template('pdf_report.html', 
-                                     model_name=model_name, 
-                                     results=results_data)
+        # Create a comprehensive HTML report
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Evaluation Report - {model_name}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
+                .header {{ text-align: center; margin-bottom: 40px; border-bottom: 2px solid #333; padding-bottom: 20px; }}
+                .summary {{ margin-bottom: 30px; }}
+                .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
+                .summary-card {{ border: 1px solid #ddd; padding: 15px; text-align: center; background: #f9f9f9; }}
+                .score {{ font-size: 2em; font-weight: bold; color: #007bff; }}
+                .task-section {{ margin-bottom: 30px; page-break-inside: avoid; }}
+                .task-header {{ background: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 10px; }}
+                .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 15px 0; }}
+                .metric-item {{ text-align: center; padding: 10px; background: #f9f9f9; border: 1px solid #ddd; }}
+                .samples-table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
+                .samples-table th, .samples-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                .samples-table th {{ background-color: #f5f5f5; }}
+                .code {{ background: #f8f8f8; padding: 5px; font-family: monospace; white-space: pre-wrap; }}
+                @media print {{ body {{ margin: 20px; }} .page-break {{ page-break-before: always; }} }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>BIG-bench Evaluation Report</h1>
+                <h2>{model_name}</h2>
+                <p>Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </div>
+        """
         
-        # Generate PDF
-        pdf_buffer = BytesIO()
-        HTML(string=html_content).write_pdf(pdf_buffer)
-        pdf_buffer.seek(0)
+        if results_data:
+            latest = results_data[0]
+            
+            # Overall Summary
+            if 'summary' in latest and latest['summary']:
+                html_content += """
+                <div class="summary">
+                    <h2>Performance Summary</h2>
+                    <div class="summary-grid">
+                """
+                
+                if 'overall' in latest['summary']:
+                    overall = latest['summary']['overall']
+                    html_content += f"""
+                    <div class="summary-card">
+                        <h3>Overall Score</h3>
+                        <div class="score">{overall['mean']*100:.1f}%</div>
+                        <p>± {overall['std']*100:.1f}% ({overall['count']} tasks)</p>
+                    </div>
+                    """
+                
+                for task_type, stats in latest['summary'].items():
+                    if task_type != 'overall':
+                        html_content += f"""
+                        <div class="summary-card">
+                            <h3>{task_type.title()}</h3>
+                            <div class="score">{stats['mean']*100:.1f}%</div>
+                            <p>± {stats['std']*100:.1f}% ({stats['count']} tasks)</p>
+                        </div>
+                        """
+                
+                html_content += "</div></div>"
+            
+            # Detailed Results
+            if 'detailed_results' in latest:
+                html_content += "<h2>Detailed Task Results</h2>"
+                
+                for i, task_result in enumerate(latest['detailed_results']):
+                    if i > 0:  # Add page break between tasks for better printing
+                        html_content += '<div class="page-break"></div>'
+                    
+                    primary_score = task_result.get('summary', {}).get('primary_metric', {}).get('mean', 0)
+                    html_content += f"""
+                    <div class="task-section">
+                        <div class="task-header">
+                            <h3>{task_result['task']}</h3>
+                            <p>Type: {task_result.get('task_type', 'N/A')} | Primary Score: {primary_score*100:.1f}%</p>
+                        </div>
+                    """
+                    
+                    # Metrics
+                    if 'summary' in task_result:
+                        html_content += '<div class="metrics-grid">'
+                        for metric_name, metric_data in task_result['summary'].items():
+                            html_content += f"""
+                            <div class="metric-item">
+                                <strong>{metric_name.replace('_', ' ').title()}</strong><br>
+                                {metric_data['mean']:.3f}
+                            </div>
+                            """
+                        html_content += '</div>'
+                    
+                    # Sample results
+                    if 'samples' in task_result and task_result['samples']:
+                        html_content += """
+                        <h4>Sample Predictions</h4>
+                        <table class="samples-table">
+                            <tr>
+                                <th>Example</th>
+                                <th>Input</th>
+                                <th>Generated</th>
+                                <th>Expected</th>
+                                <th>Score</th>
+                            </tr>
+                        """
+                        
+                        for sample in task_result['samples'][:3]:  # Show first 3 samples
+                            score = sample.get('metrics', {}).get('primary_metric', 0)
+                            html_content += f"""
+                            <tr>
+                                <td>{sample.get('example_number', 'N/A')}</td>
+                                <td><div class="code">{sample.get('input', '')[:200]}{'...' if len(str(sample.get('input', ''))) > 200 else ''}</div></td>
+                                <td><div class="code">{sample.get('generated', '')}</div></td>
+                                <td><div class="code">{sample.get('expected', '')}</div></td>
+                                <td>{score:.2f}</td>
+                            </tr>
+                            """
+                        
+                        html_content += '</table>'
+                    
+                    html_content += '</div>'
         
-        # Create response
-        response = make_response(pdf_buffer.getvalue())
-        response.headers['Content-Type'] = 'application/pdf'
-        response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_evaluation_report.pdf"'
+        html_content += f"""
+            <div class="summary" style="margin-top: 40px; border-top: 1px solid #ddd; padding-top: 20px;">
+                <p><strong>Report generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <p><strong>Total tasks evaluated:</strong> {len(latest.get('detailed_results', []))}</p>
+            </div>
+        </body>
+        </html>
+        """
         
-        return response
+        # Try to generate PDF if weasyprint is available
+        try:
+            from weasyprint import HTML
+            pdf_buffer = BytesIO()
+            HTML(string=html_content).write_pdf(pdf_buffer)
+            pdf_buffer.seek(0)
+            
+            response = make_response(pdf_buffer.getvalue())
+            response.headers['Content-Type'] = 'application/pdf'
+            response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_evaluation_report.pdf"'
+            return response
+            
+        except ImportError:
+            # Fallback: return HTML if weasyprint not available
+            response = make_response(html_content)
+            response.headers['Content-Type'] = 'text/html'
+            response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_evaluation_report.html"'
+            return response
         
     except Exception as e:
-        print(f"Error generating PDF: {e}")
-        flash(f"Error generating PDF report: {str(e)}")
+        print(f"Error generating report: {e}")
+        flash(f"Error generating report: {str(e)}")
         return redirect(url_for('analyze', model_name=model_name))
 
 @app.route('/export_json/<model_name>')
@@ -234,48 +319,6 @@ def start_evaluation(model_name):
     return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
 
 
-# @app.route('/evaluate_llm/<model_name>', methods=['POST', 'GET'])
-# def evaluate_llm(model_name):
-#     if request.method == 'GET':
-#         # Just show the loading page
-#         processing_status[model_name] = "processing"
-#         evaluation_progress[model_name] = {
-#             'stage': 0,
-#             'message': 'Preparing to start evaluation...',
-#             'timestamp': datetime.now().isoformat()
-#         }
-#         return render_template('loading.html', model_name=model_name)
-    
-#     # Handle POST request (actual evaluation)
-#     benchmark = "BIG-Bench"
-#     num_examples = int(request.form.get('num_examples', 25))
-#     max_tokens = int(request.form.get('max_tokens', 128))
-#     full_benchmark = request.form.get('full_benchmark') == 'on'
-
-#     print(f"Evaluating {model_name} on benchmark: {benchmark}")
-
-#     # Determine folder based on model_name
-#     if model_name == "Wealth Advisory Model":
-#         model_folder = "wealth_advisory"
-#     elif model_name == "Compliance Model":
-#         model_folder = "compliance"
-#     else:
-#         flash(f"Unknown model: {model_name}")
-#         return redirect(url_for('index'))
-
-#     model_path = os.path.join(model_base_path, model_folder)
-#     if not os.path.exists(model_path):
-#         return f"Model '{model_name}' not found in '{model_folder}'.", 404
-
-#     eval_params = {
-#         'num_examples': num_examples,
-#         'max_tokens': max_tokens,
-#         'full_benchmark': full_benchmark
-#     }
-
-#     run_evaluation_in_background(model_name, model_path, eval_params)
-#     return render_template('loading.html', model_name=model_name)
-# Add this global variable with other globals
 current_results = {}
 
 # Updated evaluate_llm function
@@ -315,6 +358,7 @@ def evaluate_llm(model_name):
 
 @app.route('/check_status/<model_name>')
 def check_status(model_name):
+    """Enhanced status check with strict completion validation."""
     # Get app-level status (fallback to not_started)
     status = processing_status.get(model_name, "not_started")
     
@@ -331,135 +375,67 @@ def check_status(model_name):
         # Fallback to app's local progress
         progress = evaluation_progress.get(model_name, {'stage': 0, 'message': 'Not started'})
     
-    # Auto-update status based on progress stage if needed
-    if progress.get('stage', 0) >= 6 and status != "complete":
+    # Enhanced completion validation
+    progress_stage = progress.get('stage', 0)
+    has_results = model_name in current_results and len(current_results[model_name]) > 0
+    
+    # Only mark as complete if BOTH conditions are met:
+    # 1. Progress stage indicates completion (>= 6)
+    # 2. Results are actually stored
+    if progress_stage >= 6 and has_results and status != "complete":
         status = "complete" 
         processing_status[model_name] = "complete"
-    elif progress.get('stage', 0) == -1 and status != "error":
+        print(f"✅ Marked {model_name} as complete")
+    elif progress_stage == -1:
         status = "error"
         processing_status[model_name] = "error"
-    elif progress.get('stage', 0) > 0 and status == "not_started":
+    elif progress_stage > 0 and progress_stage < 6:
         status = "processing"
         processing_status[model_name] = "processing"
     
-    # Debug logging
-    print(f"📊 Status check for {model_name}: status={status}, progress_stage={progress.get('stage', 0)}")
+    # Additional validation: if status is "complete" but no results, reset to processing
+    if status == "complete" and not has_results:
+        print(f"⚠️ Status was 'complete' but no results found for {model_name}, reverting to processing")
+        status = "processing"
+        processing_status[model_name] = "processing"
+    
+    # Debug logging - REMOVE DUPLICATE
+    print(f"📊 Status check for {model_name}: status={status}, progress_stage={progress_stage}, has_results={has_results}")
     
     return jsonify({
         "status": status,
         "progress": progress,
+        "has_results": has_results,
         "timestamp": datetime.now().isoformat()
     })
-
-@app.route('/history/<category>/<model_name>')
-def history(category, model_name):
-    """Display benchmark history for a specific model."""
-    try:
-        # Load history data
-        history_file = "evaluation_results/llm/allbenchmarkhistory.json"
-        history_data = []
-        
-        if os.path.exists(history_file):
-            with open(history_file, 'r') as f:
-                all_history = json.load(f)
-            
-            # Filter data for this specific model
-            model_history = [entry for entry in all_history if model_name in entry.get("model_path", "")]
-            
-            # Sort by run number
-            model_history.sort(key=lambda x: x.get("run", 0))
-            
-            # Process the history data for the template
-            history_data = []
-            for entry in model_history:
-                processed_entry = {
-                    'run': f"Run {entry.get('run', 1)}",
-                    'scores': {entry.get('benchmark', 'BIG-Bench'): entry.get('average', 0)},
-                    'average': entry.get('average', 0)
-                }
-                history_data.append(processed_entry)
-            
-        # Define all benchmarks we want to track
-        benchmark_list = [
-            "MMLU", "HellaSwag", "PIQA", "SocialIQA", "BooIQ", 
-            "WinoGrande", "CommonsenseQA", "OpenBookQA", "ARC-e", 
-            "ARC-c", "TriviaQA", "Natural Questions", "HumanEval", 
-            "MBPP", "GSM8K", "MATH", "AGIEval", "BIG-Bench"
-        ]
-        
-        # Calculate benchmark averages
-        benchmark_averages = {}
-        benchmark_counts = defaultdict(int)
-        benchmark_sums = defaultdict(float)
-        
-        for entry in history_data:
-            for benchmark, score in entry['scores'].items():
-                if score != 'N/A' and isinstance(score, (int, float)):
-                    benchmark_sums[benchmark] += score
-                    benchmark_counts[benchmark] += 1
-        
-        for benchmark in benchmark_list:
-            if benchmark_counts[benchmark] > 0:
-                benchmark_averages[benchmark] = benchmark_sums[benchmark] / benchmark_counts[benchmark]
-            else:
-                benchmark_averages[benchmark] = 'N/A'
-        
-        # Calculate summary statistics
-        all_scores = []
-        benchmarks_tested = set()
-        
-        for entry in history_data:
-            for benchmark, score in entry['scores'].items():
-                if score != 'N/A' and isinstance(score, (int, float)):
-                    all_scores.append(score)
-                    benchmarks_tested.add(benchmark)
-        
-        benchmark_stats = {
-            'benchmarks_tested': len(benchmarks_tested),
-            'overall_average': sum(all_scores) / len(all_scores) if all_scores else 0,
-            'best_score': max(all_scores) if all_scores else 0
-        }
-        
-        return render_template('llm/history.html',
-                             model_name=model_name,
-                             category=category,
-                             history_data=history_data,
-                             benchmark_list=benchmark_list,
-                             benchmark_averages=benchmark_averages,
-                             benchmark_stats=benchmark_stats)
-    
-    except Exception as e:
-        print(f"Error loading history: {e}")
-        return render_template('llm/history.html',
-                             model_name=model_name,
-                             category=category,
-                             history_data=[],
-                             benchmark_list=[],
-                             benchmark_averages={},
-                             benchmark_stats={'benchmarks_tested': 0, 'overall_average': 0, 'best_score': 0})
-
 
 
 @app.route('/results/<model_name>')
 def analyze(model_name):
-    """Simplified results page - only current run."""
+    """Results page with strict completion validation."""
     if model_name not in MODELS:
         return f"Model '{model_name}' not found.", 404
     
-    # Get current results only
+    # Check if evaluation is actually complete
+    status = processing_status.get(model_name, "not_started")
     results_data = current_results.get(model_name, [])
     
-    return render_template('results.html', model_name=model_name, results=results_data)
+    # If evaluation is not complete or no results, redirect to loading/index
+    if status != "complete" or not results_data:
+        if status == "processing":
+            print(f"📊 Evaluation still in progress for {model_name}, redirecting to loading page")
+            return redirect(url_for('evaluate_llm', model_name=model_name))
+        elif status == "error":
+            flash(f"Evaluation failed for {model_name}. Please try again.")
+            return redirect(url_for('index'))
+        else:
+            flash(f"No evaluation results found for {model_name}. Please run evaluation first.")
+            return redirect(url_for('index'))
+    
+    print(f"📊 Displaying results for {model_name}: {len(results_data)} result sets")
+    return render_template('results.html', model_name=model_name, history=results_data)
 
 
-UPLOAD_FOLDER = 'uploads'
-model_base_path = "models"
-processing_status = {}  # Track per-model status
-evaluation_progress = {}  # Track detailed progress
-custom_evaluation_results = {}
-processing_status = {}
-custom_evaluation_progress = {} 
-model_base_path = "models"
 @app.route('/custom_llm/<model_name>')
 def custom_llm(model_name):
     if model_name not in MODELS:
