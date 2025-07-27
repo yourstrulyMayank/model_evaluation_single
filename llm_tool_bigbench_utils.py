@@ -25,6 +25,7 @@ from collections import defaultdict
 progress_tracker = {}
 progress_lock = threading.Lock()
 task_completion_tracker = defaultdict(set)
+RESULTS_FILE = "evaluation_results.json"
 
 try:
     from rouge_score import rouge_scorer
@@ -52,6 +53,54 @@ STANDARD_EVAL_STAGES = [
     "Aggregating results...",
     "Finalizing and saving results..."
 ]
+
+def save_results_to_file(model_name: str, results_data: dict):
+    """Save results to local JSON file."""
+    try:
+        # Load existing results
+        if os.path.exists(RESULTS_FILE):
+            with open(RESULTS_FILE, 'r') as f:
+                all_results = json.load(f)
+        else:
+            all_results = {}
+        
+        # Save new results
+        all_results[model_name] = [results_data]
+        
+        # Write back to file
+        with open(RESULTS_FILE, 'w') as f:
+            json.dump(all_results, f, indent=2)
+        
+        print(f"✅ Results saved to file for {model_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving results to file: {e}")
+        return False
+
+def load_results_from_file(model_name: str = None):
+    """Load results from local JSON file."""
+    try:
+        if not os.path.exists(RESULTS_FILE):
+            return {} if model_name is None else []
+        
+        with open(RESULTS_FILE, 'r') as f:
+            all_results = json.load(f)
+        
+        if model_name:
+            return all_results.get(model_name, [])
+        return all_results
+    except Exception as e:
+        print(f"❌ Error loading results from file: {e}")
+        return {} if model_name is None else []
+
+def clear_results_file():
+    """Clear the results file."""
+    try:
+        if os.path.exists(RESULTS_FILE):
+            os.remove(RESULTS_FILE)
+        print("🧹 Results file cleared")
+    except Exception as e:
+        print(f"❌ Error clearing results file: {e}")
 
 
 # def update_standard_progress(model_name, stage, message, task_details=None):
@@ -587,25 +636,11 @@ def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 
         update_standard_progress(model_name, 5, "Saving results...")
         print(f"📊 Stage 5: Saving results for {model_name}")
         
-        # Save to app
-        try:
-            import app
-            app.current_results[model_name] = [entry]
-            print(f"✅ Results saved for {model_name}")
-        except Exception as e:
-            print(f"⚠️ Could not save to app: {e}")
-        
-        # IMMEDIATELY advance to Stage 6 (completion)
-        update_standard_progress(model_name, 6, "Evaluation completed!")
-        print(f"📊 Stage 6: Evaluation completed for {model_name}")
-        
-        # Ensure app status is updated
-        try:
-            import app
-            app.processing_status[model_name] = "complete"
-            print(f"✅ Marked {model_name} as complete")
-        except:
-            pass
+        # Save to file instead of trying to import app
+        if save_results_to_file(model_name, entry):
+            print(f"✅ Results saved to file for {model_name}")
+        else:
+            raise Exception("Failed to save results to file")
         
         return all_results
     
@@ -651,233 +686,6 @@ def run_evaluation_in_background(model_name, model_path, eval_params):
     threading.Thread(target=background_task, daemon=True).start()
 
 
-# def run_evaluation(model_name: str, model_path: str = None, num_examples: int = 50, max_new_tokens: int = 128, 
-#                           use_full_bigbench: bool = False):
-#     """Sequential evaluation with immediate progress updates."""
-    
-#     if model_path is None:
-#         model_path = model_name
-    
-#     try:
-#         # Force CPU and disable GPU warnings
-#         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-#         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-#         import warnings
-#         warnings.filterwarnings('ignore')
-        
-#         # Stage 1: Load model
-#         update_standard_progress(model_name, 1, "Loading model and tokenizer...")
-#         print(f"📊 Stage 1: Loading model for {model_name}")
-        
-#         device = torch.device("cpu")
-#         metrics = AdvancedMetrics()
-        
-#         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-#         if tokenizer.pad_token is None:
-#             tokenizer.pad_token = tokenizer.eos_token
-        
-#         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        
-#         model_kwargs = {
-#             "trust_remote_code": True,
-#             "torch_dtype": torch.float32,
-#             "low_cpu_mem_usage": True,
-#         }
-        
-#         if config.architectures:
-#             arch = config.architectures[0].lower()
-#             if any(name in arch for name in ['seq2seq', 't5', 'bart']):
-#                 model = AutoModelForSeq2SeqLM.from_pretrained(model_path, **model_kwargs)
-#             else:
-#                 model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
-#         else:
-#             model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
-        
-#         model = model.to(device)
-#         model.eval()
-#         print(f"✅ Model loaded on {device}")
-        
-#         # IMMEDIATELY advance to Stage 2
-#         update_standard_progress(model_name, 2, "Loading benchmark tasks...")
-#         print(f"📊 Stage 2: Loading tasks for {model_name}")
-        
-#         vocab = vocabs.ALL_VOCABS["t5_default"]
-#         mix_name = "bigbench:bigbench_lite_v1.mix.t5_default_vocab.0_shot.1024_examples"
-#         mix = seqio.get_mixture_or_task(mix_name)
-#         task_names = sorted([t.name for t in mix.tasks])
-#         task_names = task_names[:2]  # Limit for testing
-#         print(f"✅ Loaded {len(task_names)} tasks")
-        
-#         # IMMEDIATELY advance to Stage 3
-#         update_standard_progress(model_name, 3, f"Running evaluation on {len(task_names)} tasks...")
-#         print(f"📊 Stage 3: Starting evaluation for {model_name}")
-        
-#         all_results = []
-#         task_type_results = defaultdict(list)
-        
-#         # Sequential task processing - NO THREADING
-#         for task_idx, task_name in enumerate(task_names):
-#             current_task_msg = f"Evaluating task {task_idx + 1}/{len(task_names)}: {task_name[:30]}..."
-#             update_standard_progress(model_name, 3, current_task_msg)
-#             print(f"🔍 {current_task_msg}")
-            
-#             task_type = get_task_type(task_name)
-#             task = seqio.get_mixture_or_task(task_name)
-#             dataset = task.get_dataset(split="validation")
-            
-#             task_metrics = defaultdict(list)
-#             samples = []
-            
-#             # Sequential example processing
-#             for i, example in enumerate(dataset):
-#                 if i >= num_examples:
-#                     break
-                
-#                 try:
-#                     input_text = vocab.vocabulary.decode(example["inputs"].numpy())
-#                     target_text = vocab.vocabulary.decode(example["targets"].numpy()).strip()
-                    
-#                     prediction = generate_response(model, tokenizer, input_text, task_type, max_new_tokens)
-#                     eval_results = evaluate_example(prediction, target_text, task_type, metrics)
-                    
-#                     for metric_name, score in eval_results.items():
-#                         task_metrics[metric_name].append(score)
-                    
-#                     sample_data = {
-#                         "example_number": i + 1,
-#                         "input": input_text[:200],
-#                         "expected": target_text,
-#                         "generated": prediction,
-#                         "metrics": eval_results,
-#                         "task_type": task_type
-#                     }
-#                     samples.append(sample_data)
-                    
-#                 except Exception as e:
-#                     print(f"⚠️ Skipping example {i}: {e}")
-#                     continue
-            
-#             # Process task results
-#             task_summary = {}
-#             for metric_name, scores in task_metrics.items():
-#                 if scores:
-#                     task_summary[metric_name] = {
-#                         'mean': np.mean(scores),
-#                         'std': np.std(scores),
-#                         'count': len(scores)
-#                     }
-            
-#             task_result = {
-#                 "task": task_name,
-#                 "task_type": task_type,
-#                 "summary": task_summary,
-#                 "samples": samples[:5],
-#                 "timestamp": datetime.now().isoformat()
-#             }
-            
-#             all_results.append(task_result)
-#             if 'primary_metric' in task_summary:
-#                 task_type_results[task_type].append(task_summary['primary_metric']['mean'])
-            
-#             print(f"✅ Completed task {task_idx + 1}/{len(task_names)}")
-        
-#         # IMMEDIATELY advance to Stage 4 after all tasks complete
-#         update_standard_progress(model_name, 4, "Aggregating results...")
-#         print(f"📊 Stage 4: Aggregating results for {model_name}")
-        
-#         summary = {}
-#         for task_type, scores in task_type_results.items():
-#             if scores:
-#                 summary[task_type] = {
-#                     'mean': float(np.mean(scores)),
-#                     'std': float(np.std(scores)),
-#                     'count': len(scores)
-#                 }
-        
-#         overall_scores = [s for scores in task_type_results.values() for s in scores]
-#         if overall_scores:
-#             summary['overall'] = {
-#                 'mean': float(np.mean(overall_scores)),
-#                 'std': float(np.std(overall_scores)),
-#                 'count': len(overall_scores)
-#             }
-        
-#         entry = {
-#             "model_path": model_name,
-#             "summary": summary,
-#             "detailed_results": all_results,
-#             "timestamp": datetime.now().isoformat(),
-#             "num_tasks": len(all_results),
-#             "status": "completed"
-#         }
-        
-#         # IMMEDIATELY advance to Stage 5
-#         update_standard_progress(model_name, 5, "Saving results...")
-#         print(f"📊 Stage 5: Saving results for {model_name}")
-        
-#         # Save to app
-#         try:
-#             import app
-#             app.current_results[model_name] = [entry]
-#             print(f"✅ Results saved for {model_name}")
-#         except Exception as e:
-#             print(f"⚠️ Could not save to app: {e}")
-        
-#         # IMMEDIATELY advance to Stage 6 (completion)
-#         update_standard_progress(model_name, 6, "Evaluation completed!")
-#         print(f"📊 Stage 6: Evaluation completed for {model_name}")
-        
-#         # Ensure app status is updated
-#         try:
-#             import app
-#             app.processing_status[model_name] = "complete"
-#             print(f"✅ Marked {model_name} as complete")
-#         except:
-#             pass
-        
-#         return all_results
-    
-#     except Exception as e:
-#         update_standard_progress(model_name, -1, f"Error: {str(e)}")
-#         print(f"❌ Evaluation failed for {model_name}: {e}")
-#         try:
-#             import app
-#             app.processing_status[model_name] = "error"
-#         except:
-#             pass
-#         raise e
-
-# def run_evaluation_in_background(model_name, model_path, eval_params):
-#     """Run evaluation in background thread - but evaluation itself is sequential."""
-    
-#     print(f"🚀 Starting evaluation for {model_name}")
-    
-#     # Set initial status
-#     try:
-#         import app
-#         app.processing_status[model_name] = "processing"
-#         if model_name in app.current_results:
-#             del app.current_results[model_name]
-#     except:
-#         pass
-
-#     def background_task():
-#         try:
-#             # Run SEQUENTIAL evaluation (no internal threading)
-#             run_evaluation(
-#                 model_name=model_name,
-#                 model_path=model_path,
-#                 num_examples=eval_params.get('num_examples', 5),
-#                 max_new_tokens=eval_params.get('max_tokens', 128),
-#                 use_full_bigbench=eval_params.get('full_benchmark', False)
-#             )
-                
-#         except Exception as e:
-#             print(f"❌ Background evaluation failed for {model_name}: {e}")
-
-#     # Only this part uses threading - the evaluation itself is sequential
-#     threading.Thread(target=background_task, daemon=True).start()
-
 def update_standard_progress(model_name, stage, message, task_details=None):
     """Simple, immediate progress update."""
     progress_data = {
@@ -901,7 +709,7 @@ def update_standard_progress(model_name, stage, message, task_details=None):
         # Update status based on stage
         if stage == -1:
             app.processing_status[model_name] = "error"
-        elif stage >= 6:  # Changed from 5 to 6
+        elif stage >= 5:  # Change this back to 5 instead of 6
             app.processing_status[model_name] = "complete"
         else:
             app.processing_status[model_name] = "processing"

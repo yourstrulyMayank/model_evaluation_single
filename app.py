@@ -306,6 +306,13 @@ def start_evaluation(model_name):
     if not os.path.exists(model_path):
         return jsonify({'error': f"Model '{model_name}' not found."}), 404
 
+    # Clear previous results
+    try:
+        from llm_tool_bigbench_utils import clear_results_file
+        clear_results_file()
+    except Exception as e:
+        print(f"⚠️ Warning: Could not clear results file: {e}")
+
     # Default evaluation parameters
     eval_params = {
         'num_examples': 25,
@@ -317,6 +324,7 @@ def start_evaluation(model_name):
     run_evaluation_in_background(model_name, model_path, eval_params)
     
     return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
+    
 
 
 current_results = {}
@@ -362,7 +370,7 @@ def check_status(model_name):
     # Get app-level status (fallback to not_started)
     status = processing_status.get(model_name, "not_started")
     
-    # Get progress from utils module (primary source)
+    # Get progress from utils module (primary source)  
     try:
         from llm_tool_bigbench_utils import get_progress
         progress = get_progress(model_name)
@@ -377,30 +385,32 @@ def check_status(model_name):
     
     # Enhanced completion validation
     progress_stage = progress.get('stage', 0)
-    has_results = model_name in current_results and len(current_results[model_name]) > 0
+    
+    # Check if results exist in file
+    try:
+        from llm_tool_bigbench_utils import load_results_from_file
+        file_results = load_results_from_file(model_name)
+        has_results = len(file_results) > 0
+    except:
+        has_results = False
     
     # Only mark as complete if BOTH conditions are met:
-    # 1. Progress stage indicates completion (>= 6)
-    # 2. Results are actually stored
-    if progress_stage >= 6 and has_results and status != "complete":
+    if progress_stage >= 5 and has_results and status != "complete":
         status = "complete" 
         processing_status[model_name] = "complete"
         print(f"✅ Marked {model_name} as complete")
     elif progress_stage == -1:
         status = "error"
         processing_status[model_name] = "error"
-    elif progress_stage > 0 and progress_stage < 6:
+    elif progress_stage > 0 and progress_stage < 5:
         status = "processing"
         processing_status[model_name] = "processing"
     
-    # Additional validation: if status is "complete" but no results, reset to processing
-    if status == "complete" and not has_results:
-        print(f"⚠️ Status was 'complete' but no results found for {model_name}, reverting to processing")
-        status = "processing"
-        processing_status[model_name] = "processing"
-    
-    # Debug logging - REMOVE DUPLICATE
+    # Debug logging - add this right before the return statement
     print(f"📊 Status check for {model_name}: status={status}, progress_stage={progress_stage}, has_results={has_results}")
+    print(f"📊 Available models in current_results: {list(current_results.keys())}")
+    if model_name in current_results:
+        print(f"📊 Results for {model_name}: {len(current_results[model_name])} entries")
     
     return jsonify({
         "status": status,
@@ -409,18 +419,35 @@ def check_status(model_name):
         "timestamp": datetime.now().isoformat()
     })
 
+@app.route('/clear_results/<model_name>')
+def clear_model_results(model_name):
+    """Clear results for a specific model before starting evaluation."""
+    try:
+        from llm_tool_bigbench_utils import clear_results_file
+        clear_results_file()
+        print(f"🧹 Cleared results file before evaluating {model_name}")
+        return jsonify({'status': 'cleared'})
+    except Exception as e:
+        print(f"❌ Error clearing results: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/results/<model_name>')
 def analyze(model_name):
-    """Results page with strict completion validation."""
+    """Results page loading from file."""
     if model_name not in MODELS:
         return f"Model '{model_name}' not found.", 404
     
-    # Check if evaluation is actually complete
-    status = processing_status.get(model_name, "not_started")
-    results_data = current_results.get(model_name, [])
+    # Load results from file
+    try:
+        from llm_tool_bigbench_utils import load_results_from_file
+        results_data = load_results_from_file(model_name)
+    except Exception as e:
+        print(f"❌ Error loading results from file: {e}")
+        results_data = []
     
-    # If evaluation is not complete or no results, redirect to loading/index
+    # Check if evaluation is complete and has results
+    status = processing_status.get(model_name, "not_started")
+    
     if status != "complete" or not results_data:
         if status == "processing":
             print(f"📊 Evaluation still in progress for {model_name}, redirecting to loading page")
