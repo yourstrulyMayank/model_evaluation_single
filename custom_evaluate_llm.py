@@ -1,33 +1,26 @@
-# custom_evaluate_llm.py
-
 import os
 import pandas as pd
-from PIL import Image
 from flask import current_app
-from transformers import DonutProcessor, VisionEncoderDecoderModel
-import torch
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from rapidfuzz import fuzz, process
-import json
+import threading
 from datetime import datetime
 import traceback
-import threading
+import glob
+import requests
+from tqdm import tqdm
+import chromadb
+from chromadb.config import Settings
+from sentence_transformers import SentenceTransformer
+
+# Global configuration
+# EMBED_MODEL = SentenceTransformer("BAAI/bge-small-en-v1.5")
+EMBED_MODEL = SentenceTransformer("models/custom_embedding")
+OLLAMA_URL = "http://localhost:11434"
+OLLAMA_MODEL = "mistral:7b"
+CHROMA_DB_PATH = "./chroma_db"
+
 # Global progress tracker
 progress_tracker = {}
 progress_lock = threading.Lock()
-
-
-# Load models
-print("🔄 Loading Donut and SentenceTransformer models...")
-processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa")
-donut_model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-docvqa")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-donut_model.to(device)
-print(f"✅ Models loaded successfully on device: {device}")
-
 
 def update_progress(model_name, stage, message):
     """Update progress for a specific model evaluation."""
@@ -52,69 +45,116 @@ def clear_progress(model_name):
         if model_name in progress_tracker:
             del progress_tracker[model_name]
     print(f"🧹 Cleared progress tracking for {model_name}")
-    
-def extract_answer_from_image(image: Image.Image, prompt: str) -> str:
-    """Use Donut to extract an answer from image given a prompt."""
-    print(f"📄 Processing prompt: {prompt}")
-    image = image.convert("RGB")
-    pixel_values = processor(image, return_tensors="pt").pixel_values.to(device)
-    task_prompt = f"<s_docvqa><s_question>{prompt}</s_question><s_answer>"
-    decoder_input_ids = processor.tokenizer(task_prompt, add_special_tokens=False, return_tensors="pt").input_ids.to(device)
-    outputs = donut_model.generate(
-        pixel_values,
-        decoder_input_ids=decoder_input_ids,
-        max_length=512,
-        early_stopping=True,
-        pad_token_id=processor.tokenizer.pad_token_id
-    )
-    result = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-    print(f"🔍 Extracted result: {result[:100]}...")
-    return result
 
+def get_embedding(text):
+    """Generate embedding for text using BGE-small-en-v1.5 model"""
+    return EMBED_MODEL.encode(text).tolist()
 
-def clean_number_string(s):
-    if isinstance(s, str):
-        return s.replace(',', '').strip()
-    return s
-
-
-def is_number(s):
+def ingest_documents(folder_path, collection_name="docs"):
+    """Ingest documents from a folder into the vector database"""
     try:
-        float(s)
+        client = chromadb.Client(Settings(persist_directory=CHROMA_DB_PATH))
+        
+        # Delete existing collection if it exists
+        try:
+            client.delete_collection(collection_name)
+            print(f"🗑️ Deleted existing collection: {collection_name}")
+        except:
+            pass
+        
+        collection = client.get_or_create_collection(collection_name)
+        
+        # Get all PDF files in the folder
+        files = glob.glob(os.path.join(folder_path, "*.pdf"))
+        if not files:
+            print(f"No PDF files found in {folder_path}")
+            return False
+            
+        for file in tqdm(files, desc="Ingesting documents"):
+            try:
+                # For now, we'll assume PDF content is extracted elsewhere
+                # In a real implementation, you'd use PyPDF2 or similar
+                with open(file, "r", encoding="utf-8", errors='ignore') as f:
+                    text = f.read()
+                
+                # Split text into chunks (500 characters each)
+                chunks = [text[i:i+500] for i in range(0, len(text), 500)]
+                
+                for idx, chunk in enumerate(chunks):
+                    if chunk.strip():  # Only add non-empty chunks
+                        emb = get_embedding("passage: " + chunk)
+                        collection.add(
+                            documents=[chunk],
+                            embeddings=[emb],
+                            ids=[f"{os.path.basename(file)}_{idx}"]
+                        )
+            except Exception as e:
+                print(f"Error processing file {file}: {str(e)}")
+                continue
+                
+        client.persist()
+        print("Document ingestion completed successfully.")
         return True
-    except Exception:
+        
+    except Exception as e:
+        print(f"Error during ingestion: {str(e)}")
         return False
 
+def query_documents(question, collection_name="docs", num_results=4):
+    """Query the document collection with a question"""
+    try:
+        client = chromadb.Client(Settings(persist_directory=CHROMA_DB_PATH))
+        collection = client.get_collection(collection_name)
+        
+        # Generate embedding for the question
+        q_emb = get_embedding("query: " + question)
+        
+        # Query the collection
+        results = collection.query(
+            query_embeddings=[q_emb],
+            n_results=num_results
+        )
+        
+        # Combine context from relevant chunks
+        context = "\n\n".join([doc for doc in results["documents"][0]])
+        
+        # Create prompt for the model
+        prompt = f"Answer the question based on the context below.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
+        
+        # Get response from Ollama
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt}
+        )
+        
+        return response.json()["response"]
+        
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-def compute_confidence(actual, extracted):
-    """Compute confidence score between actual and extracted values."""
+def calculate_similarity_score(actual, extracted):
+    """Calculate similarity score between actual and extracted values"""
     if pd.isna(actual) or pd.isna(extracted):
         return 0.0
-
-    actual_str = str(actual).strip()
-    extracted_str = str(extracted).strip()
-    actual_clean = clean_number_string(actual_str)
-    extracted_clean = clean_number_string(extracted_str)
-
-    if is_number(actual_clean) and is_number(extracted_clean):
-        actual_num = float(actual_clean)
-        extracted_num = float(extracted_clean)
-        denom = max(abs(actual_num), abs(extracted_num), 1)
-        similarity = 1 - abs(actual_num - extracted_num) / denom
-        score = round(max(0.0, similarity) * 100, 2)
-        print(f"🔢 Numerical comparison: {actual_num} vs {extracted_num} = {score}%")
-        return score
-
-    actual_emb = embedding_model.encode(actual_str)
-    extracted_emb = embedding_model.encode(extracted_str)
-    score = cosine_similarity([actual_emb], [extracted_emb])[0][0]
-    final_score = round(score * 100, 2)
-    print(f"📝 Text similarity: '{actual_str}' vs '{extracted_str}' = {final_score}%")
-    return final_score
-
+    
+    actual_str = str(actual).strip().lower()
+    extracted_str = str(extracted).strip().lower()
+    
+    # Simple similarity calculation (you can enhance this)
+    if actual_str == extracted_str:
+        return 100.0
+    elif actual_str in extracted_str or extracted_str in actual_str:
+        return 80.0
+    else:
+        # Use sentence transformer for semantic similarity
+        actual_emb = EMBED_MODEL.encode(actual_str)
+        extracted_emb = EMBED_MODEL.encode(extracted_str)
+        from sklearn.metrics.pairwise import cosine_similarity
+        score = cosine_similarity([actual_emb], [extracted_emb])[0][0]
+        return round(score * 100, 2)
 
 def grade_confidence(score):
-    """Grade the confidence score."""
+    """Grade the confidence score"""
     if score >= 90:
         return '✅ Pass'
     elif score >= 70:
@@ -122,240 +162,119 @@ def grade_confidence(score):
     else:
         return '❌ Fail'
 
-
-def generate_transaction_summary(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate transaction summary analysis."""
-    print("📊 Generating transaction summary...")
-    df['Date'] = pd.to_datetime(df['Date'])
-    df['Withdrawls'] = pd.to_numeric(df['Withdrawls'], errors='coerce').fillna(0)
-    df['Deposits'] = pd.to_numeric(df['Deposits'], errors='coerce').fillna(0)
-    df['month'] = df['Date'].dt.to_period('M')
-    df['week'] = df['Date'].dt.to_period('W')
-    df['day'] = df['Date'].dt.date
-
-    monthly_deposits = df.groupby('month')['Deposits'].sum().to_dict()
-    monthly_withdrawls = df.groupby('month')['Withdrawls'].sum().to_dict()
-
-    prompt_answer_pairs = {
-        "Weekly_average_withdrawal_amount?": df.groupby('week')['Withdrawls'].sum().mean(),
-        "Daily_average_withdrawal_amount?": df.groupby('day')['Withdrawls'].sum().mean(),
-        "Monthly_average_withdrawal_amount?": df.groupby('month')['Withdrawls'].sum().mean(),
-
-        "Weekly_average_deposit_amount?": df.groupby('week')['Deposits'].sum().mean(),
-        "Daily_average_deposit_amount?": df.groupby('day')['Deposits'].sum().mean(),
-        "Monthly_average_deposit_amount?": df.groupby('month')['Deposits'].sum().mean(),
-
-        "maximum_withdrawal_made?": df.loc[df['Withdrawls'].idxmax(), 'Date'].strftime('%Y-%m-%d'),
-        "minimum_withdrawal_made?": df.loc[df['Withdrawls'][df['Withdrawls'] > 0].idxmin(), 'Date'].strftime('%Y-%m-%d'),
-
-        "total_deposit_amount for each_month?": ", ".join([f"{k}: {v:.2f}" for k, v in monthly_deposits.items()]),
-        "total_withdrawal_amount for each_month?": ", ".join([f"{k}: {v:.2f}" for k, v in monthly_withdrawls.items()]),
-
-        "Which description has the highest_wihdrawal?": df.loc[df['Withdrawls'].idxmax(), 'Description'],
-        "Which description has the lowest_wihdrawal?": df.loc[df['Withdrawls'][df['Withdrawls'] > 0].idxmin(), 'Description'],
-    }
-
-    print(f"✅ Generated {len(prompt_answer_pairs)} transaction analysis prompts")
-    return pd.DataFrame(list(prompt_answer_pairs.items()), columns=['Prompt', 'Extracted'])
-
-
-def match_and_merge_results(merged_df, ground_truth_df):
-    """Match and merge results with ground truth using fuzzy matching."""
-    print("🔍 Matching results with ground truth...")
-    ground_truth_df['Prompt_clean'] = ground_truth_df['Prompt'].str.strip().str.lower()
-    merged_df['Prompt_clean'] = merged_df['Prompt'].str.strip().str.lower()
-
-    matched_prompts = []
-    for actual_prompt in ground_truth_df['Prompt_clean']:
-        match, score, _ = process.extractOne(actual_prompt, merged_df['Prompt_clean'], scorer=fuzz.token_sort_ratio)
-        matched_prompts.append({'Prompt_clean': actual_prompt, 'Matched_prompt_clean': match, 'Score': score})
-        print(f"🎯 Matched '{actual_prompt}' -> '{match}' (score: {score})")
-
-    match_df = pd.DataFrame(matched_prompts)
-    gt_matched = ground_truth_df.merge(match_df, on='Prompt_clean', how='left')
-
-    merged_with_extracted = gt_matched.merge(
-        merged_df[['Prompt_clean', 'Extracted']],
-        left_on='Matched_prompt_clean',
-        right_on='Prompt_clean',
-        how='left'
-    )
-
-    final_df = merged_with_extracted[['Prompt', 'Actual', 'Extracted']]
-    final_df['Match_Status'] = merged_with_extracted['Score'].apply(lambda x: '✅' if x >= 90 else '⚠')
-    print(f"✅ Matched and merged {len(final_df)} results")
-    return final_df
-
-
-def evaluate_image_and_transactions(image_path, transaction_excel, ground_truth_excel):
-    """Main evaluation function for image and transaction analysis."""
-    print(f"🚀 Starting evaluation for image: {image_path}")
-    
-    # Load and process image
-    image = Image.open(image_path)
-    prompts = [
-        "What is the name of the bank?",
-        "What is the statement period?",
-        "What is the account number?",
-        "What is the total withdrawal amount?",
-        "What is the total deposit amount?",
-        "What is the maximum withdrawals amount?",
-        "What is the minimum withdrawals amount?",
-        "What is the maximum deposits amount?",
-        "What is the minimum deposits amount?"
-    ]
-
-    print(f"🔄 Processing {len(prompts)} image prompts...")
-    results = []
-    for i, prompt in enumerate(prompts, 1):
-        print(f"📄 Processing prompt {i}/{len(prompts)}: {prompt}")
-        answer = extract_answer_from_image(image, prompt)
-        if answer.lower().startswith(prompt.lower()):
-            answer = answer[len(prompt):].strip().strip(":-")
-        results.append({"Prompt": prompt, "Extracted": answer})
-
-    image_df = pd.DataFrame(results)
-    print(f"✅ Completed image analysis with {len(image_df)} results")
-
-    # Process transaction data
-    print(f"📊 Loading transaction data from: {transaction_excel}")
-    trans_df = pd.read_excel(transaction_excel)
-    print(f"📈 Loaded {len(trans_df)} transaction records")
-    
-    trans_summary = generate_transaction_summary(trans_df)
-
-    # Merge results
-    merged_df = pd.concat([image_df, trans_summary], ignore_index=True)
-    print(f"🔗 Merged datasets: {len(merged_df)} total results")
-
-    # Load ground truth
-    print(f"📋 Loading ground truth from: {ground_truth_excel}")
-    gt_df = pd.read_excel(ground_truth_excel)
-    print(f"✅ Loaded {len(gt_df)} ground truth entries")
-
-    # Match and evaluate
-    final_df = match_and_merge_results(merged_df, gt_df)
-    
-    print("🧮 Computing confidence scores...")
-    final_df['Confidence_Score'] = final_df.apply(
-        lambda r: compute_confidence(r['Actual'], r['Extracted']), axis=1
-    )
-    final_df['Test_case'] = final_df['Confidence_Score'].apply(grade_confidence)
-    final_df['Confidence_Score'] = final_df['Confidence_Score'].round(2)
-
-    print("✅ Evaluation completed successfully!")
-    return final_df[['Prompt', 'Actual', 'Extracted', 'Confidence_Score', 'Test_case']]
-
-
-def find_files_in_directory(upload_dir):
-    """Find required files in the upload directory."""
-    print(f"🔍 Scanning upload directory: {upload_dir}")
-    
-    image_files = []
-    transaction_files = []
-    ground_truth_files = []
-    
-    if not os.path.exists(upload_dir):
-        print(f"❌ Upload directory does not exist: {upload_dir}")
-        return None, None, None
-    
-    for filename in os.listdir(upload_dir):
-        filepath = os.path.join(upload_dir, filename)
-        if os.path.isfile(filepath):
-            lower_filename = filename.lower()
-            
-            # Image files
-            if any(ext in lower_filename for ext in ['.png', '.jpg', '.jpeg']):
-                image_files.append(filepath)
-                print(f"📸 Found image file: {filename}")
-            
-            # Transaction files
-            elif any(keyword in lower_filename for keyword in ['transaction', 'trans']) and \
-                 any(ext in lower_filename for ext in ['.xlsx', '.xls', '.csv']):
-                transaction_files.append(filepath)
-                print(f"📊 Found transaction file: {filename}")
-            
-            # Ground truth files
-            elif any(keyword in lower_filename for keyword in ['ground', 'truth', 'gt']) and \
-                 any(ext in lower_filename for ext in ['.xlsx', '.xls', '.csv']):
-                ground_truth_files.append(filepath)
-                print(f"📋 Found ground truth file: {filename}")
-    
-    # Return first found file of each type
-    image_file = image_files[0] if image_files else None
-    transaction_file = transaction_files[0] if transaction_files else None
-    ground_truth_file = ground_truth_files[0] if ground_truth_files else None
-    
-    print(f"📁 File selection summary:")
-    print(f"   Image: {os.path.basename(image_file) if image_file else 'None'}")
-    print(f"   Transaction: {os.path.basename(transaction_file) if transaction_file else 'None'}")
-    print(f"   Ground Truth: {os.path.basename(ground_truth_file) if ground_truth_file else 'None'}")
-    
-    return image_file, transaction_file, ground_truth_file
-
-
-
 def run_custom_evaluation(model_name, model_path, upload_dir):
-    """
-    Main function to run custom evaluation - this is what app.py imports and calls.
-    """
-    print(f"🚀 Starting custom evaluation for model: {model_name}")
-    print(f"📂 Model path: {model_path}")
-    print(f"📁 Upload directory: {upload_dir}")
+    """Main function to run custom RAG-based evaluation"""
+    print(f"🚀 Starting custom RAG evaluation for model: {model_name}")
     
     try:
         # Stage 1: Loading models and initializing
         update_progress(model_name, 1, "Loading models and initializing...")
         
-        # Use fixed file paths instead of dynamic discovery
-        image_file = os.path.join(upload_dir,'bank_2.png')
-        transaction_file = os.path.join(upload_dir,'transaction details.xlsx')
-        ground_truth_file = os.path.join(upload_dir,'Ground_truth_data.xlsx')
+        # Determine evaluation type based on folder structure
+        wealth_advisory_dir = os.path.join(upload_dir, 'wealth_advisory')
+        compliance_dir = os.path.join(upload_dir, 'compliance')
         
-        # Validate required files exist
-        missing_files = []
-        if not os.path.exists(image_file):
-            missing_files.append(f"Image file: {image_file}")
-        if not os.path.exists(transaction_file):
-            missing_files.append(f"Transaction file: {transaction_file}")
-        if not os.path.exists(ground_truth_file):
-            missing_files.append(f"Ground truth file: {ground_truth_file}")
+        eval_type = None
+        eval_dir = None
         
-        if missing_files:
-            error_msg = f"Missing required files: {', '.join(missing_files)}"
-            print(f"❌ {error_msg}")
-            update_progress(model_name, 1, f"Error: {error_msg}")
-            return {
-                "error": error_msg,
-                "files_processed": 0,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
+        if os.path.exists(wealth_advisory_dir):
+            eval_type = "wealth_advisory"
+            eval_dir = wealth_advisory_dir
+        elif os.path.exists(compliance_dir):
+            eval_type = "compliance"
+            eval_dir = compliance_dir
+        else:
+            raise Exception("Neither 'wealth_advisory' nor 'compliance' folder found in uploads directory")
         
-        # Stage 2: Processing uploaded files
-        update_progress(model_name, 2, "Processing uploaded files...")
-        print("✅ All required files found, starting evaluation...")
+        print(f"📁 Using evaluation type: {eval_type}")
+        print(f"📂 Evaluation directory: {eval_dir}")
         
-        # Stage 3: Analyzing document content
-        update_progress(model_name, 3, "Analyzing document content...")
+        # Find PDF files and Excel ground truth
+        pdf_files = glob.glob(os.path.join(eval_dir, "*.pdf"))
+        excel_files = glob.glob(os.path.join(eval_dir, "*.xlsx")) + glob.glob(os.path.join(eval_dir, "*.xls"))
         
-        # Run evaluation
-        evaluation_df = evaluate_image_and_transactions(
-            image_file, 
-            transaction_file, 
-            ground_truth_file
-        )
+        if not pdf_files:
+            raise Exception(f"No PDF files found in {eval_dir}")
+        if not excel_files:
+            raise Exception(f"No Excel ground truth files found in {eval_dir}")
         
-        # Stage 4: Comparing with ground truth
-        update_progress(model_name, 4, "Comparing with ground truth...")
-        print("📊 Processing evaluation results...")
+        pdf_file = pdf_files[0]
+        excel_file = excel_files[0]
+        
+        print(f"📄 Using PDF: {os.path.basename(pdf_file)}")
+        print(f"📊 Using Excel: {os.path.basename(excel_file)}")
+        
+        # Stage 2: Processing uploaded files and ingesting to ChromaDB
+        update_progress(model_name, 2, "Processing files and creating vector database...")
+        
+        collection_name = f"{model_name}_{eval_type}"
+        success = ingest_documents(eval_dir, collection_name)
+        if not success:
+            raise Exception("Failed to ingest documents into ChromaDB")
+        
+        # Stage 3: Loading ground truth and running queries
+        update_progress(model_name, 3, "Loading ground truth and running queries...")
+        
+        # Load ground truth Excel file
+        df_ground_truth = pd.read_excel(excel_file)
+        if 'Prompt' not in df_ground_truth.columns or 'GroundTruth' not in df_ground_truth.columns:
+            raise Exception("Excel file must contain 'Prompt' and 'GroundTruth' columns")
+        
+        print(f"📋 Loaded {len(df_ground_truth)} prompts from ground truth")
+        
+        # Stage 4: Analyzing content and generating responses
+        update_progress(model_name, 4, "Analyzing content and generating responses...")
+        
+        results = []
+        for idx, row in tqdm(df_ground_truth.iterrows(), total=len(df_ground_truth), desc="Processing prompts"):
+            prompt = row['Prompt']
+            ground_truth = row['GroundTruth']
+            
+            if pd.isna(prompt) or prompt.strip() == '':
+                continue
+            
+            try:
+                # Query the RAG system
+                extracted_answer = query_documents(prompt, collection_name)
+                
+                # Calculate similarity score
+                score = calculate_similarity_score(ground_truth, extracted_answer)
+                grade = grade_confidence(score)
+                
+                results.append({
+                    'prompt': prompt,
+                    'actual': str(ground_truth),
+                    'extracted': str(extracted_answer),
+                    'score': float(score),
+                    'grade': grade
+                })
+                
+            except Exception as e:
+                print(f"Error processing prompt: {prompt} - {str(e)}")
+                results.append({
+                    'prompt': prompt,
+                    'actual': str(ground_truth),
+                    'extracted': f"Error: {str(e)}",
+                    'score': 0.0,
+                    'grade': '❌ Fail'
+                })
+        
+        # Stage 5: Finalizing results
+        update_progress(model_name, 5, "Finalizing evaluation results...")
+        
+        if not results:
+            raise Exception("No results generated from evaluation")
         
         # Calculate summary statistics
-        total_tests = len(evaluation_df)
-        pass_count = len(evaluation_df[evaluation_df['Test_case'] == '✅ Pass'])
-        intermittent_count = len(evaluation_df[evaluation_df['Test_case'] == '⚠ Intermittent'])
-        fail_count = len(evaluation_df[evaluation_df['Test_case'] == '❌ Fail'])
-        avg_score = evaluation_df['Confidence_Score'].mean()
+        total_tests = len(results)
+        pass_count = len([r for r in results if r['grade'] == '✅ Pass'])
+        intermittent_count = len([r for r in results if r['grade'] == '⚠ Intermittent'])
+        fail_count = len([r for r in results if r['grade'] == '❌ Fail'])
+        
+        scores = [r['score'] for r in results]
+        avg_score = sum(scores) / len(scores) if scores else 0
         overall_score = avg_score
+        success_rate = (pass_count / total_tests * 100) if total_tests > 0 else 0
         
         print(f"📈 Evaluation Summary:")
         print(f"   Total Tests: {total_tests}")
@@ -364,51 +283,38 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
         print(f"   Failed: {fail_count} ({fail_count/total_tests*100:.1f}%)")
         print(f"   Average Score: {avg_score:.1f}%")
         
-        # Stage 5: Finalizing
-        update_progress(model_name, 5, "Finalizing evaluation...")
-        
-        # Convert DataFrame to list of dictionaries for JSON serialization
-        ground_truth_comparison = []
-        for _, row in evaluation_df.iterrows():
-            ground_truth_comparison.append({
-                'prompt': row['Prompt'],
-                'actual': str(row['Actual']),
-                'extracted': str(row['Extracted']),
-                'score': float(row['Confidence_Score']),
-                'grade': row['Test_case']
-            })
-        
         # Prepare comprehensive results
-        results = {
+        final_results = {
             "model_name": model_name,
+            "evaluation_type": eval_type,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "files_processed": 3,  # image, transaction, ground truth
+            "files_processed": len(pdf_files) + len(excel_files),
             "overall_score": float(overall_score),
             "total_tests": total_tests,
             "pass_count": pass_count,
             "intermittent_count": intermittent_count,
             "fail_count": fail_count,
             "average_score": float(avg_score),
-            "success_rate": float(pass_count / total_tests * 100),
-            "ground_truth_comparison": ground_truth_comparison,
+            "success_rate": float(success_rate),
+            "ground_truth_comparison": results,
             "file_info": {
-                "image_file": os.path.basename(image_file),
-                "transaction_file": os.path.basename(transaction_file),
-                "ground_truth_file": os.path.basename(ground_truth_file)
+                "pdf_file": os.path.basename(pdf_file),
+                "ground_truth_file": os.path.basename(excel_file),
+                "evaluation_directory": eval_type
             },
             "summary_statistics": {
-                "highest_score": float(evaluation_df['Confidence_Score'].max()),
-                "lowest_score": float(evaluation_df['Confidence_Score'].min()),
-                "median_score": float(evaluation_df['Confidence_Score'].median()),
-                "std_deviation": float(evaluation_df['Confidence_Score'].std())
+                "highest_score": float(max(scores)) if scores else 0,
+                "lowest_score": float(min(scores)) if scores else 0,
+                "median_score": float(sorted(scores)[len(scores)//2]) if scores else 0,
+                "std_deviation": float(pd.Series(scores).std()) if scores else 0
             }
         }
         
         # Mark as completed
         update_progress(model_name, 6, "Evaluation completed successfully!")
         
-        print("🎉 Custom evaluation completed successfully!")
-        return results
+        print("🎉 Custom RAG evaluation completed successfully!")
+        return final_results
         
     except Exception as e:
         error_msg = f"Evaluation failed: {str(e)}"
@@ -424,46 +330,3 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "traceback": traceback.format_exc()
         }
-
-
-# Additional utility functions for compatibility
-def get_custom_evaluation_history(model_name):
-    """Get custom evaluation history for a model."""
-    results_dir = "evaluation_results"
-    results_file = os.path.join(results_dir, f"{model_name}_custom_evaluation.json")
-    
-    if os.path.exists(results_file):
-        try:
-            with open(results_file, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading custom evaluation history: {e}")
-            return {}
-    
-    return {}
-
-
-def save_evaluation_results(model_name, results):
-    """Save evaluation results to file."""
-    results_dir = "evaluation_results"
-    os.makedirs(results_dir, exist_ok=True)
-    
-    results_file = os.path.join(results_dir, f"{model_name}_custom_evaluation.json")
-    
-    try:
-        with open(results_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"✅ Results saved successfully to {results_file}")
-        return True
-    except Exception as e:
-        print(f"❌ Error saving results: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    # Test function - can be used for standalone testing
-    print("🧪 Running custom evaluation test...")
-    
-    # Example usage:
-    # results = run_custom_evaluation("test_model", "/path/to/model", "/path/to/uploads")
-    # print(json.dumps(results, indent=2))

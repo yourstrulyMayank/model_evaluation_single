@@ -504,17 +504,11 @@ def custom_llm(model_name):
         flash(f"Unknown model: {model_name}")
         return redirect(url_for('index'))
 
-    model_upload_dir = os.path.join(UPLOAD_FOLDER, model_name)
-    uploaded_files = []
-    if os.path.exists(model_upload_dir):
-        uploaded_files = [f for f in os.listdir(model_upload_dir) if os.path.isfile(os.path.join(model_upload_dir, f))]
-    
     # Get current evaluation results only
     results = current_results.get(f"{model_name}_custom", {})
     
     return render_template('custom_llm.html', 
                          model_name=model_name, 
-                         uploaded_files=uploaded_files,
                          evaluation_results=results)
 
 
@@ -525,21 +519,28 @@ def run_custom_evaluation_route(model_name):
     
     try:
         # Import custom evaluator
-        from llm_custom_utils import run_custom_evaluation
+        from custom_evaluate_llm import run_custom_evaluation
         
         # Get model path
         model_path = MODELS[model_name]
         upload_dir = os.path.join(UPLOAD_FOLDER)
         
         if not os.path.exists(upload_dir):
-            return jsonify({'error': 'No files uploaded for evaluation'}), 400
+            return jsonify({'error': 'Upload directory not found'}), 400
+        
+        # Check if wealth_advisory or compliance folder exists
+        wealth_advisory_dir = os.path.join(upload_dir, 'wealth_advisory')
+        compliance_dir = os.path.join(upload_dir, 'compliance')
+        
+        if not os.path.exists(wealth_advisory_dir) and not os.path.exists(compliance_dir):
+            return jsonify({'error': 'Neither wealth_advisory nor compliance folder found in uploads'}), 400
         
         # Set processing status
         processing_status[f"{model_name}_custom"] = "processing"
         
         def background_evaluation():
             try:
-                print(f"Starting custom evaluation for {model_name}")
+                print(f"Starting custom RAG evaluation for {model_name}")
                 # Run custom evaluation
                 results = run_custom_evaluation(model_name, model_path, upload_dir)
                 print(f"Custom evaluation completed for {model_name}")
@@ -580,12 +581,15 @@ def clear_custom_results(model_name):
         if custom_key in processing_status:
             del processing_status[custom_key]
         
+        # Clear progress tracking
+        from custom_evaluate_llm import clear_progress
+        clear_progress(model_name)
+        
         return jsonify({'status': 'success', 'message': 'Results cleared successfully'})
         
     except Exception as e:
         print(f"Error clearing results for {model_name}: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 
 @app.route('/check_custom_status/<model_name>')
@@ -596,7 +600,7 @@ def check_custom_status(model_name):
     
     # Get progress information
     try:
-        from llm_custom_utils import get_progress
+        from custom_evaluate_llm import get_progress
         progress_info = get_progress(model_name)
     except:
         progress_info = {'stage': 0, 'message': 'Not started'}
@@ -609,6 +613,7 @@ def check_custom_status(model_name):
     }
     
     return jsonify(response_data)
+
 
 @app.route('/download_custom_excel/<model_name>')
 def download_custom_excel(model_name):
@@ -625,7 +630,6 @@ def download_custom_excel(model_name):
             flash("No evaluation results found for this model.")
             return redirect(url_for('custom_llm', model_name=model_name))
         
-        # Same Excel generation logic as before...
         import pandas as pd
         from io import BytesIO
         
@@ -653,13 +657,13 @@ def download_custom_excel(model_name):
             # Summary sheet
             summary_data = {
                 'Metric': [
-                    'Model Name', 'Evaluation Date', 'Total Tests', 'Tests Passed',
-                    'Tests Failed', 'Intermittent Tests', 'Overall Score (%)',
-                    'Success Rate (%)', 'Average Score', 'Highest Score',
-                    'Lowest Score', 'Files Processed'
+                    'Model Name', 'Evaluation Type', 'Evaluation Date', 'Total Tests', 
+                    'Tests Passed', 'Tests Failed', 'Intermittent Tests', 'Overall Score (%)',
+                    'Success Rate (%)', 'Average Score', 'Highest Score', 'Lowest Score'
                 ],
                 'Value': [
                     results.get('model_name', model_name),
+                    results.get('evaluation_type', 'N/A'),
                     results.get('timestamp', 'N/A'),
                     results.get('total_tests', 0),
                     results.get('pass_count', 0),
@@ -669,8 +673,7 @@ def download_custom_excel(model_name):
                     round(results.get('success_rate', 0), 2),
                     round(results.get('average_score', 0), 2),
                     round(results.get('summary_statistics', {}).get('highest_score', 0), 2),
-                    round(results.get('summary_statistics', {}).get('lowest_score', 0), 2),
-                    results.get('files_processed', 0)
+                    round(results.get('summary_statistics', {}).get('lowest_score', 0), 2)
                 ]
             }
             
