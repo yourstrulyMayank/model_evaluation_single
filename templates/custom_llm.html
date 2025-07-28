@@ -851,3 +851,40 @@
             } else {
                 showError('Evaluation completed but no results available: ' + (results?.error || 'Unknown error'));
             }
+            }
+
+        function showError(message) {
+            const statusSection = document.getElementById('status-section');
+            const evalSection = document.getElementById('eval-section');
+            const resultsSection = document.getElementById('results-section');
+            statusSection.style.display = 'none';
+            evalSection.style.display = 'block';
+            resultsSection.style.display = 'none';
+
+            // Show error alert
+            let alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger';
+            alertDiv.textContent = message;
+            evalSection.insertBefore(alertDiv, evalSection.firstChild);
+
+            // Re-enable start button
+            const startBtn = document.getElementById('startEvalBtn');
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.textContent = 'Start Custom Evaluation';
+            }
+        }
+
+        // On page load, show results section if results exist
+        window.onload = function() {
+            {% if evaluation_results %}
+                document.getElementById('results-section').style.display = 'block';
+                document.getElementById('eval-section').style.display = 'none';
+            {% else %}
+                document.getElementById('results-section').style.display = 'none';
+                document.getElementById('eval-section').style.display = 'block';
+            {% endif %}
+        };
+    </script>
+</body>
+</html>
