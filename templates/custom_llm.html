@@ -852,45 +852,54 @@
                 showError('Evaluation completed but no results available: ' + (results?.error || 'Unknown error'));
             }
         }
-            
-        function showError(message) {
-            const statusSection = document.getElementById('status-section');
-            const evalSection = document.getElementById('eval-section');
-            const resultsSection = document.getElementById('results-section');
-            statusSection.style.display = 'none';
-            evalSection.style.display = 'block';
-            if (resultsSection) resultsSection.style.display = 'none';
 
-            // Remove any previous alerts
-            const oldAlerts = document.querySelectorAll('.alert.alert-danger');
-            oldAlerts.forEach(alert => alert.remove());
+       function showError(message) {
+           const statusSection = document.getElementById('status-section');
+           const startBtn = document.getElementById('startEvalBtn');
+           const evalSection = document.getElementById('eval-section');
+           
+           statusSection.style.display = 'none';
+           evalSection.style.display = 'block';
+           startBtn.disabled = false;
+           startBtn.textContent = 'Start Custom Evaluation';
+           
+           // Show error message
+           const alertDiv = document.createElement('div');
+           alertDiv.className = 'alert alert-danger';
+           alertDiv.innerHTML = '<strong>❌ Error:</strong> ' + message;
+           
+           const container = document.querySelector('.container .card');
+           container.insertBefore(alertDiv, container.firstChild);
+           
+           // Remove error message after 10 seconds
+           setTimeout(() => {
+               alertDiv.remove();
+           }, 10000);
+       }
 
-            // Show error alert
-            let alertDiv = document.createElement('div');
-            alertDiv.className = 'alert alert-danger';
-            alertDiv.innerHTML = '<strong>❌ Error:</strong> ' + message;
-            evalSection.insertBefore(alertDiv, evalSection.firstChild);
+       // Check if evaluation is already running when page loads
+       document.addEventListener('DOMContentLoaded', function() {
+           // Show results if they exist
+           {% if evaluation_results and not evaluation_results.get('error') %}
+               document.getElementById('results-section').style.display = 'block';
+               document.getElementById('eval-section').style.display = 'none';
+           {% endif %}
 
-            // Re-enable start button
-            const startBtn = document.getElementById('startEvalBtn');
-            if (startBtn) {
-                startBtn.disabled = false;
-                startBtn.textContent = 'Start Custom Evaluation';
-            }
-        }
-
-        // On page load, show results section if results exist, else show eval section
-        window.onload = function() {
-            var resultsSection = document.getElementById('results-section');
-            var evalSection = document.getElementById('eval-section');
-            {% if evaluation_results and not evaluation_results.get('error') %}
-                if (resultsSection) resultsSection.style.display = 'block';
-                if (evalSection) evalSection.style.display = 'none';
-            {% else %}
-                if (resultsSection) resultsSection.style.display = 'none';
-                if (evalSection) evalSection.style.display = 'block';
-            {% endif %}
-        };
-    </script>
+           
+           fetch(`/check_custom_status/{{ model_name }}`)
+               .then(response => response.json())
+               .then(data => {
+                   if (data.status === 'processing') {
+                       document.getElementById('status-section').style.display = 'block';
+                       document.getElementById('eval-section').style.display = 'none';
+                       document.getElementById('results-section').style.display = 'none';
+                       pollEvaluationStatus();
+                   }
+               })
+               .catch(error => {
+                   console.error('Error checking initial status:', error);
+               });
+       });
+   </script>
 </body>
 </html>
