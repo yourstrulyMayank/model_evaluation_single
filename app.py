@@ -512,6 +512,61 @@ def custom_llm(model_name):
                          evaluation_results=results)
 
 
+# @app.route('/run_custom_evaluation/<model_name>', methods=['POST'])
+# def run_custom_evaluation_route(model_name):
+#     if model_name not in MODELS:
+#         return jsonify({'error': 'Unknown model'}), 400
+    
+#     try:
+#         # Import custom evaluator
+#         from custom_evaluate_llm import run_custom_evaluation
+        
+#         # Get model path
+#         model_path = MODELS[model_name]
+#         upload_dir = os.path.join(UPLOAD_FOLDER)
+        
+#         if not os.path.exists(upload_dir):
+#             return jsonify({'error': 'Upload directory not found'}), 400
+        
+#         # Check if wealth_advisory or compliance folder exists
+#         wealth_advisory_dir = os.path.join(upload_dir, 'wealth_advisory')
+#         compliance_dir = os.path.join(upload_dir, 'compliance')
+        
+#         if not os.path.exists(wealth_advisory_dir) and not os.path.exists(compliance_dir):
+#             return jsonify({'error': 'Neither wealth_advisory nor compliance folder found in uploads'}), 400
+        
+#         # Set processing status
+#         processing_status[f"{model_name}_custom"] = "processing"
+        
+#         def background_evaluation():
+#             try:
+#                 print(f"Starting custom RAG evaluation for {model_name}")
+#                 # Run custom evaluation
+#                 results = run_custom_evaluation(model_name, model_path, upload_dir)
+#                 print(f"Custom evaluation completed for {model_name}")
+                
+#                 # Store in current results only
+#                 current_results[f"{model_name}_custom"] = results
+#                 processing_status[f"{model_name}_custom"] = "complete"
+                
+#             except Exception as e:
+#                 print(f"Custom evaluation error for {model_name}: {e}")
+#                 import traceback
+#                 traceback.print_exc()
+                
+#                 processing_status[f"{model_name}_custom"] = "error"
+#                 current_results[f"{model_name}_custom"] = {"error": str(e)}
+        
+#         # Run in background
+#         threading.Thread(target=background_evaluation, daemon=True).start()
+        
+#         return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
+        
+#     except Exception as e:
+#         print(f"Error starting evaluation: {e}")
+#         processing_status[f"{model_name}_custom"] = "error"
+#         return jsonify({'error': f'Error starting evaluation: {str(e)}'}), 500
+
 @app.route('/run_custom_evaluation/<model_name>', methods=['POST'])
 def run_custom_evaluation_route(model_name):
     if model_name not in MODELS:
@@ -521,8 +576,17 @@ def run_custom_evaluation_route(model_name):
         # Import custom evaluator
         from custom_evaluate_llm import run_custom_evaluation
         
-        # Get model path
-        model_path = MODELS[model_name]
+        # For custom_llm, get model path from custom_models folder
+        # Determine model path based on evaluation type
+        wealth_advisory_dir = os.path.join(upload_dir, 'wealth_advisory')
+        compliance_dir = os.path.join(upload_dir, 'compliance')
+        
+        if os.path.exists(wealth_advisory_dir):
+            model_path = f"custom_models/wealth_advisory/{model_name}"
+        elif os.path.exists(compliance_dir):
+            model_path = f"custom_models/compliance/{model_name}"  
+        else:
+            model_path = MODELS[model_name]  # Fallback to original MODELS dict
         upload_dir = os.path.join(UPLOAD_FOLDER)
         
         if not os.path.exists(upload_dir):
@@ -540,10 +604,10 @@ def run_custom_evaluation_route(model_name):
         
         def background_evaluation():
             try:
-                print(f"Starting custom RAG evaluation for {model_name}")
-                # Run custom evaluation
+                print(f"Starting custom RAG evaluation with NLP metrics for {model_name}")
+                # Run custom evaluation with NLP pipeline
                 results = run_custom_evaluation(model_name, model_path, upload_dir)
-                print(f"Custom evaluation completed for {model_name}")
+                print(f"Custom evaluation with NLP metrics completed for {model_name}")
                 
                 # Store in current results only
                 current_results[f"{model_name}_custom"] = results
@@ -560,12 +624,13 @@ def run_custom_evaluation_route(model_name):
         # Run in background
         threading.Thread(target=background_evaluation, daemon=True).start()
         
-        return jsonify({'status': 'started', 'message': 'Evaluation started successfully'})
+        return jsonify({'status': 'started', 'message': 'Evaluation with NLP metrics started successfully'})
         
     except Exception as e:
         print(f"Error starting evaluation: {e}")
         processing_status[f"{model_name}_custom"] = "error"
         return jsonify({'error': f'Error starting evaluation: {str(e)}'}), 500
+
 
 
 @app.route('/clear_custom_results/<model_name>', methods=['POST'])
@@ -615,9 +680,88 @@ def check_custom_status(model_name):
     return jsonify(response_data)
 
 
+# @app.route('/download_custom_excel/<model_name>')
+# def download_custom_excel(model_name):
+#     """Download custom evaluation results as Excel file."""
+#     if model_name not in MODELS:
+#         flash("Model not found.")
+#         return redirect(url_for('index'))
+    
+#     try:
+#         # Get current evaluation results only
+#         results = current_results.get(f"{model_name}_custom", {})
+        
+#         if not results or results.get('error'):
+#             flash("No evaluation results found for this model.")
+#             return redirect(url_for('custom_llm', model_name=model_name))
+        
+#         import pandas as pd
+#         from io import BytesIO
+        
+#         output = BytesIO()
+        
+#         with pd.ExcelWriter(output, engine='openpyxl') as writer:
+#             # Main results sheet
+#             if 'ground_truth_comparison' in results:
+#                 comparison_data = results['ground_truth_comparison']
+                
+#                 df_results = pd.DataFrame([
+#                     {
+#                         'Prompt': item['prompt'],
+#                         'Ground_Truth_Actual': item['actual'],
+#                         'Model_Extracted': item['extracted'],
+#                         'Confidence_Score': item['score'],
+#                         'Test_Grade': item['grade'],
+#                         'Status': 'Pass' if item['grade'] == '✅ Pass' else 'Fail' if item['grade'] == '❌ Fail' else 'Intermittent'
+#                     }
+#                     for item in comparison_data
+#                 ])
+                
+#                 df_results.to_excel(writer, sheet_name='Evaluation_Results', index=False)
+            
+#             # Summary sheet
+#             summary_data = {
+#                 'Metric': [
+#                     'Model Name', 'Evaluation Type', 'Evaluation Date', 'Total Tests', 
+#                     'Tests Passed', 'Tests Failed', 'Intermittent Tests', 'Overall Score (%)',
+#                     'Success Rate (%)', 'Average Score', 'Highest Score', 'Lowest Score'
+#                 ],
+#                 'Value': [
+#                     results.get('model_name', model_name),
+#                     results.get('evaluation_type', 'N/A'),
+#                     results.get('timestamp', 'N/A'),
+#                     results.get('total_tests', 0),
+#                     results.get('pass_count', 0),
+#                     results.get('fail_count', 0),
+#                     results.get('intermittent_count', 0),
+#                     round(results.get('overall_score', 0), 2),
+#                     round(results.get('success_rate', 0), 2),
+#                     round(results.get('average_score', 0), 2),
+#                     round(results.get('summary_statistics', {}).get('highest_score', 0), 2),
+#                     round(results.get('summary_statistics', {}).get('lowest_score', 0), 2)
+#                 ]
+#             }
+            
+#             df_summary = pd.DataFrame(summary_data)
+#             df_summary.to_excel(writer, sheet_name='Summary', index=False)
+        
+#         output.seek(0)
+        
+#         response = make_response(output.getvalue())
+#         response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+#         response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_custom_evaluation_results.xlsx"'
+        
+#         return response
+        
+#     except Exception as e:
+#         print(f"Error generating Excel file: {e}")
+#         flash(f"Error generating Excel file: {str(e)}")
+#         return redirect(url_for('custom_llm', model_name=model_name))
+
+
 @app.route('/download_custom_excel/<model_name>')
 def download_custom_excel(model_name):
-    """Download custom evaluation results as Excel file."""
+    """Download custom evaluation results as Excel file with NLP metrics."""
     if model_name not in MODELS:
         flash("Model not found.")
         return redirect(url_for('index'))
@@ -636,7 +780,7 @@ def download_custom_excel(model_name):
         output = BytesIO()
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Main results sheet
+            # Main results sheet (UI compatible format)
             if 'ground_truth_comparison' in results:
                 comparison_data = results['ground_truth_comparison']
                 
@@ -647,19 +791,28 @@ def download_custom_excel(model_name):
                         'Model_Extracted': item['extracted'],
                         'Confidence_Score': item['score'],
                         'Test_Grade': item['grade'],
-                        'Status': 'Pass' if item['grade'] == '✅ Pass' else 'Fail' if item['grade'] == '❌ Fail' else 'Intermittent'
+                        'Status': 'Pass' if item['grade'] == '✅ Pass' else 'Fail'
                     }
                     for item in comparison_data
                 ])
                 
                 df_results.to_excel(writer, sheet_name='Evaluation_Results', index=False)
             
+            # Detailed NLP metrics sheet
+            if 'detailed_nlp_results' in results:
+                nlp_df = pd.DataFrame(results['detailed_nlp_results'])
+                # Remove columns that might not be needed for Excel export
+                columns_to_exclude = ['GT_Entities', 'Pred_Entities']
+                nlp_df = nlp_df.drop(columns=[col for col in columns_to_exclude if col in nlp_df.columns])
+                nlp_df.to_excel(writer, sheet_name='Detailed_NLP_Metrics', index=False)
+            
             # Summary sheet
             summary_data = {
                 'Metric': [
                     'Model Name', 'Evaluation Type', 'Evaluation Date', 'Total Tests', 
-                    'Tests Passed', 'Tests Failed', 'Intermittent Tests', 'Overall Score (%)',
-                    'Success Rate (%)', 'Average Score', 'Highest Score', 'Lowest Score'
+                    'Tests Passed', 'Tests Failed', 'Overall Score (%)',
+                    'Success Rate (%)', 'Average Score', 'Highest Score', 'Lowest Score',
+                    'Median Score', 'Standard Deviation'
                 ],
                 'Value': [
                     results.get('model_name', model_name),
@@ -668,12 +821,13 @@ def download_custom_excel(model_name):
                     results.get('total_tests', 0),
                     results.get('pass_count', 0),
                     results.get('fail_count', 0),
-                    results.get('intermittent_count', 0),
                     round(results.get('overall_score', 0), 2),
                     round(results.get('success_rate', 0), 2),
                     round(results.get('average_score', 0), 2),
                     round(results.get('summary_statistics', {}).get('highest_score', 0), 2),
-                    round(results.get('summary_statistics', {}).get('lowest_score', 0), 2)
+                    round(results.get('summary_statistics', {}).get('lowest_score', 0), 2),
+                    round(results.get('summary_statistics', {}).get('median_score', 0), 2),
+                    round(results.get('summary_statistics', {}).get('std_deviation', 0), 2)
                 ]
             }
             
@@ -684,7 +838,7 @@ def download_custom_excel(model_name):
         
         response = make_response(output.getvalue())
         response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_custom_evaluation_results.xlsx"'
+        response.headers['Content-Disposition'] = f'attachment; filename="{model_name}_custom_nlp_evaluation_results.xlsx"'
         
         return response
         
@@ -692,7 +846,6 @@ def download_custom_excel(model_name):
         print(f"Error generating Excel file: {e}")
         flash(f"Error generating Excel file: {str(e)}")
         return redirect(url_for('custom_llm', model_name=model_name))
-
 
 
 if __name__ == '__main__':

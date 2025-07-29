@@ -1,3 +1,4 @@
+#custom_evaluate_llm.py
 import os
 import pandas as pd
 from flask import current_app
@@ -10,9 +11,31 @@ from tqdm import tqdm
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
+import re
+import nltk
+import torch
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from sentence_transformers import util
+from bert_score import score as bert_score
+from rouge_score import rouge_scorer
+import spacy
+
+# Download required NLTK data
+try:
+    nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+    nltk.download('stopwords', quiet=True)
+except:
+    pass
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except:
+    print("Warning: spaCy model not found. Entity overlap will be disabled.")
+    nlp = None
 
 # Global configuration
-# EMBED_MODEL = SentenceTransformer("BAAI/bge-small-en-v1.5")
 EMBED_MODEL = SentenceTransformer("models/custom_embedding")
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "mistral:7b"
@@ -47,7 +70,7 @@ def clear_progress(model_name):
     print(f"🧹 Cleared progress tracking for {model_name}")
 
 def get_embedding(text):
-    """Generate embedding for text using BGE-small-en-v1.5 model"""
+    """Generate embedding for text using custom embedding model"""
     return EMBED_MODEL.encode(text).tolist()
 
 def ingest_documents(folder_path, collection_name="docs"):
@@ -132,38 +155,121 @@ def query_documents(question, collection_name="docs", num_results=4):
     except Exception as e:
         return f"Error: {str(e)}"
 
-def calculate_similarity_score(actual, extracted):
-    """Calculate similarity score between actual and extracted values"""
-    if pd.isna(actual) or pd.isna(extracted):
-        return 0.0
-    
-    actual_str = str(actual).strip().lower()
-    extracted_str = str(extracted).strip().lower()
-    
-    # Simple similarity calculation (you can enhance this)
-    if actual_str == extracted_str:
-        return 100.0
-    elif actual_str in extracted_str or extracted_str in actual_str:
-        return 80.0
-    else:
-        # Use sentence transformer for semantic similarity
-        actual_emb = EMBED_MODEL.encode(actual_str)
-        extracted_emb = EMBED_MODEL.encode(extracted_str)
-        from sklearn.metrics.pairwise import cosine_similarity
-        score = cosine_similarity([actual_emb], [extracted_emb])[0][0]
-        return round(score * 100, 2)
+# === NLP Evaluation Functions ===
+def preprocess_text(text):
+    text = str(text).lower()
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\n+', '\n', text)
+    text = re.sub(r'[^a-z0-9\s\.,;:?!\'"\-\n]', '', text)
+    return text.strip()
 
-def grade_confidence(score):
-    """Grade the confidence score"""
-    if score >= 90:
-        return '✅ Pass'
-    elif score >= 70:
-        return '⚠ Intermittent'
-    else:
-        return '❌ Fail'
+def evaluate_texts(gt_text, pred_text):
+    gt_clean = preprocess_text(gt_text)
+    pred_clean = preprocess_text(pred_text)
+
+    gt_tokens = word_tokenize(gt_clean)
+    pred_tokens = word_tokenize(pred_clean)
+    gt_word_count = len(gt_tokens)
+    pred_word_count = len(pred_tokens)
+
+    # Embedding similarity
+    embed_model = SentenceTransformer("all-mpnet-base-v2")
+    gt_emb = embed_model.encode(gt_clean, convert_to_tensor=True)
+    pred_emb = embed_model.encode(pred_clean, convert_to_tensor=True)
+    cosine_sim = util.pytorch_cos_sim(gt_emb, pred_emb).item()
+
+    # BERTScore
+    P, R, F1 = bert_score([pred_clean], [gt_clean], lang='en', model_type='microsoft/deberta-xlarge-mnli')
+    bert_precision = P[0].item()
+    bert_recall = R[0].item()
+    bert_f1 = F1[0].item()
+
+    # ROUGE
+    rouge = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+    rouge_scores = rouge.score(gt_clean, pred_clean)
+    rouge1 = rouge_scores['rouge1'].fmeasure
+    rougeL = rouge_scores['rougeL'].fmeasure
+
+    # Entity Overlap
+    def extract_entities(text):
+        if nlp is None:
+            return set()
+        return set(ent.text.lower() for ent in nlp(text).ents)
+    
+    ents_gt = extract_entities(gt_clean)
+    ents_pred = extract_entities(pred_clean)
+    entity_overlap = len(ents_gt & ents_pred) / max(len(ents_gt | ents_pred), 1) if ents_gt or ents_pred else 1.0
+
+    # Length ratio and coverage
+    length_ratio = pred_word_count / max(gt_word_count, 1)
+    coverage_score = bert_recall * length_ratio
+    composite_score = 0.5 * bert_f1 + 0.5 * coverage_score
+
+    return {
+        "GT_WordCount": gt_word_count,
+        "Pred_WordCount": pred_word_count,
+        "LengthRatio": round(length_ratio, 4),
+        "CosineSimilarity": round(cosine_sim, 4),
+        "BERTScore_Precision": round(bert_precision, 4),
+        "BERTScore_Recall": round(bert_recall, 4),
+        "BERTScore_F1": round(bert_f1, 4),
+        "ROUGE-1_F": round(rouge1, 4),
+        "ROUGE-L_F": round(rougeL, 4),
+        "EntityOverlap": round(entity_overlap, 4),
+        "CoverageScore": round(coverage_score, 4),
+        "CompositeScore": round(composite_score, 4),
+        "GT_Entities": list(ents_gt),
+        "Pred_Entities": list(ents_pred)
+    }
+
+def decide_pass_fail(row):
+    thresholds = {
+        "CosineSimilarity": 0.75,
+        "BERTScore_Precision": 0.70,
+        "BERTScore_Recall": 0.30,
+        "BERTScore_F1": 0.50,
+        "ROUGE-1_F": 0.40,
+        "ROUGE-L_F": 0.40,
+        "EntityOverlap": 0.50,
+        "CoverageScore": 0.30,
+        "CompositeScore": 0.50,
+        "LengthRatio": 0.40
+    }
+    for metric, threshold in thresholds.items():
+        if row[metric] < threshold:
+            return "❌ Fail"
+    return "✅ Pass"
+
+def failed_metrics(row):
+    thresholds = {
+        "CosineSimilarity": 0.75,
+        "BERTScore_Precision": 0.70,
+        "BERTScore_Recall": 0.30,
+        "BERTScore_F1": 0.50,
+        "ROUGE-1_F": 0.40,
+        "ROUGE-L_F": 0.40,
+        "EntityOverlap": 0.50,
+        "CoverageScore": 0.30,
+        "CompositeScore": 0.50,
+        "LengthRatio": 0.40
+    }
+    return ", ".join([f"{m}<{thresholds[m]}" for m in thresholds if row[m] < thresholds[m]])
+
+def run_evaluation_on_dataframe(input_df):
+    records = []
+    for _, row in input_df.iterrows():
+        result = evaluate_texts(row['GroundTruth'], row['Predicted'])
+        for key in result:
+            row[key] = result[key]
+        records.append(row)
+
+    df = pd.DataFrame(records)
+    df['PassFail'] = df.apply(decide_pass_fail, axis=1)
+    df['FailedMetrics'] = df.apply(failed_metrics, axis=1)
+    return df
 
 def run_custom_evaluation(model_name, model_path, upload_dir):
-    """Main function to run custom RAG-based evaluation"""
+    """Main function to run custom RAG-based evaluation with NLP metrics"""
     print(f"🚀 Starting custom RAG evaluation for model: {model_name}")
     
     try:
@@ -181,7 +287,7 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
             eval_type = "wealth_advisory"
             eval_dir = wealth_advisory_dir
         elif os.path.exists(compliance_dir):
-            eval_type = "compliance"
+            eval_type = "compliance" 
             eval_dir = compliance_dir
         else:
             raise Exception("Neither 'wealth_advisory' nor 'compliance' folder found in uploads directory")
@@ -215,8 +321,14 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
         # Stage 3: Loading ground truth and running queries
         update_progress(model_name, 3, "Loading ground truth and running queries...")
         
-        # Load ground truth Excel file
-        df_ground_truth = pd.read_excel(excel_file)
+        # Load ground truth Excel file with appropriate sheet
+        sheet_name = 'WA_GT' if eval_type == 'wealth_advisory' else 'CA_GT'
+        try:
+            df_ground_truth = pd.read_excel(excel_file, sheet_name=sheet_name)
+        except:
+            # Fallback to default sheet if named sheet doesn't exist
+            df_ground_truth = pd.read_excel(excel_file)
+        
         if 'Prompt' not in df_ground_truth.columns or 'GroundTruth' not in df_ground_truth.columns:
             raise Exception("Excel file must contain 'Prompt' and 'GroundTruth' columns")
         
@@ -225,50 +337,63 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
         # Stage 4: Analyzing content and generating responses
         update_progress(model_name, 4, "Analyzing content and generating responses...")
         
-        results = []
+        # ----------------------------Model Extraction starts----------------------------------
+        predicted_responses = []
         for idx, row in tqdm(df_ground_truth.iterrows(), total=len(df_ground_truth), desc="Processing prompts"):
             prompt = row['Prompt']
-            ground_truth = row['GroundTruth']
             
             if pd.isna(prompt) or prompt.strip() == '':
+                predicted_responses.append({
+                    'Prompt': prompt,
+                    'Predicted': ""
+                })
                 continue
             
             try:
                 # Query the RAG system
                 extracted_answer = query_documents(prompt, collection_name)
-                
-                # Calculate similarity score
-                score = calculate_similarity_score(ground_truth, extracted_answer)
-                grade = grade_confidence(score)
-                
-                results.append({
-                    'prompt': prompt,
-                    'actual': str(ground_truth),
-                    'extracted': str(extracted_answer),
-                    'score': float(score),
-                    'grade': grade
+                predicted_responses.append({
+                    'Prompt': prompt,
+                    'Predicted': str(extracted_answer)
                 })
                 
             except Exception as e:
                 print(f"Error processing prompt: {prompt} - {str(e)}")
-                results.append({
-                    'prompt': prompt,
-                    'actual': str(ground_truth),
-                    'extracted': f"Error: {str(e)}",
-                    'score': 0.0,
-                    'grade': '❌ Fail'
+                predicted_responses.append({
+                    'Prompt': prompt,
+                    'Predicted': f"Error: {str(e)}"
                 })
         
-        # Stage 5: Finalizing results
-        update_progress(model_name, 5, "Finalizing evaluation results...")
+        # Create predicted dataframe
+        predicted_df = pd.DataFrame(predicted_responses)
         
-        if not results:
+        # Merge ground truth with predictions
+        df_merged = pd.merge(df_ground_truth, predicted_df, on='Prompt', how='inner')
+        # ----------------------------Model Extracted_df completed----------------------------------
+        
+        # Stage 5: Running NLP evaluation
+        update_progress(model_name, 5, "Running comprehensive NLP evaluation...")
+        
+        final_report_df = run_evaluation_on_dataframe(df_merged)
+        
+        if final_report_df.empty:
             raise Exception("No results generated from evaluation")
+        
+        # Convert NLP results to the expected format for UI
+        results = []
+        for _, row in final_report_df.iterrows():
+            results.append({
+                'prompt': row['Prompt'],
+                'actual': str(row['GroundTruth']),
+                'extracted': str(row['Predicted']),
+                'score': float(row['CompositeScore'] * 100),  # Convert to percentage
+                'grade': row['PassFail']
+            })
         
         # Calculate summary statistics
         total_tests = len(results)
         pass_count = len([r for r in results if r['grade'] == '✅ Pass'])
-        intermittent_count = len([r for r in results if r['grade'] == '⚠ Intermittent'])
+        intermittent_count = 0  # Not used in new evaluation
         fail_count = len([r for r in results if r['grade'] == '❌ Fail'])
         
         scores = [r['score'] for r in results]
@@ -279,9 +404,11 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
         print(f"📈 Evaluation Summary:")
         print(f"   Total Tests: {total_tests}")
         print(f"   Passed: {pass_count} ({pass_count/total_tests*100:.1f}%)")
-        print(f"   Intermittent: {intermittent_count} ({intermittent_count/total_tests*100:.1f}%)")
         print(f"   Failed: {fail_count} ({fail_count/total_tests*100:.1f}%)")
         print(f"   Average Score: {avg_score:.1f}%")
+        
+        # Stage 6: Finalizing results
+        update_progress(model_name, 6, "Finalizing evaluation results...")
         
         # Prepare comprehensive results
         final_results = {
@@ -307,13 +434,14 @@ def run_custom_evaluation(model_name, model_path, upload_dir):
                 "lowest_score": float(min(scores)) if scores else 0,
                 "median_score": float(sorted(scores)[len(scores)//2]) if scores else 0,
                 "std_deviation": float(pd.Series(scores).std()) if scores else 0
-            }
+            },
+            "detailed_nlp_results": final_report_df.to_dict('records')  # Store detailed NLP metrics
         }
         
         # Mark as completed
-        update_progress(model_name, 6, "Evaluation completed successfully!")
+        update_progress(model_name, 7, "Evaluation completed successfully!")
         
-        print("🎉 Custom RAG evaluation completed successfully!")
+        print("🎉 Custom RAG evaluation with NLP metrics completed successfully!")
         return final_results
         
     except Exception as e:
