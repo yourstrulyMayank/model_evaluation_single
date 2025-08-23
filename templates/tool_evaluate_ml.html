@@ -1,0 +1,1301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Model Analysis - {{ model_name }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #fffbe7 0%, #f5e6ca 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 30px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        header img {
+            height: 60px;
+            transition: transform 0.3s ease;
+        }
+
+        header img:hover {
+            transform: scale(1.05);
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            color: #666;
+        }
+        
+        .back-button {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 130px;
+            height: 55px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .back-button:hover {
+            transform: translateY(-4px) scale(1.05);
+            box-shadow: 0 12px 35px rgba(102, 126, 234, 0.6);
+            background: linear-gradient(135deg, #764ba2, #667eea);
+        }
+
+        
+
+        .content {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .progress-section {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        nav {
+            width: 100%;
+            text-align: left;
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 500;
+            margin-right: 30px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        nav a:hover:not(.greyed) {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        nav a.greyed {
+            color: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 1.1em;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .progress-percentage {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .results-section {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease;
+        }
+
+        .results-section.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .model-summary {
+            background: linear-gradient(135deg,rgb(104, 5, 116) 0%, #f5576c 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+
+        .model-summary h3 {
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .model-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+        }
+
+        .model-stat {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            backdrop-filter: blur(5px);
+            min-width: 0; /* allow flex/grid to shrink */
+            word-break: break-word; /* allow long words to wrap */
+        }
+
+        .model-stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+            word-break: break-word;
+            white-space: normal;
+            overflow-wrap: break-word;
+            line-height: 1.2;
+            max-width: 100%;
+        }
+
+        .model-stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .metric-label {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .metric-description {
+            font-size: 0.9em;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .info-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border: 2px solid #f0f0f0;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .info-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .info-card h3 {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .info-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .info-description {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .table-container {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .table-header {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #333;
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .visualization-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .viz-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .viz-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .viz-header {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+            text-align: center;
+            text-transform: capitalize;
+        }
+
+        .viz-content {
+            text-align: center;
+        }
+
+        .viz-content img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #56ab2f, #a8e6cf);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white;
+        }
+
+        .btn-info {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .error-message {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .error-message h3 {
+            font-size: 1.8em;
+            margin-bottom: 15px;
+        }
+
+        .tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .metric-comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .comparison-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .download-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .model-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .detail-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .detail-card h4 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        .detail-list {
+            list-style: none;
+        }
+
+        .detail-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .detail-list li:last-child {
+            border-bottom: none;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-yes {
+            background: #28a745;
+        }
+
+        .status-no {
+            background: #dc3545;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .visualization-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .model-stats {
+                grid-template-columns: 1fr;
+            }
+
+            
+
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <img src="/static/infosys.png" alt="Logo">
+        <h1> ML Model Evaluation</h1>
+        <img src="/static/ABCBank.png" alt="Logo">
+    </header>
+    <nav>
+        <a href="/"></a>
+    </nav>
+    <!-- Enhanced Back Button -->
+    <a href="/" class="back-button" title="Back to Dashboard">
+        ←Back
+    </a>
+
+    <div class="container">
+        <div class="header">
+            
+            <h2>Comprehensive evaluation of model: <strong>{{ model_name }}</strong></h2>
+        </div>
+        
+        <div class="content">
+            <!-- Progress Section -->
+            <div class="progress-section" id="progressSection">
+                <div class="loading-spinner" id="loadingSpinner"></div>
+                <div class="progress-text" id="progressText">Initializing comprehensive analysis...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-percentage" id="progressPercentage">0%</div>
+            </div>
+
+            <!-- Results Section -->
+            <div class="results-section" id="resultsSection">
+                <!-- Model Summary -->
+                <div class="model-summary" id="modelSummary" style="display: none;">
+                    <h3>Model Overview</h3>
+                    <div class="model-stats">
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="modelType">-</div>
+                            <div class="model-stat-label">Model Type</div>
+                        </div>
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="problemType">-</div>
+                            <div class="model-stat-label">Problem Type</div>
+                        </div>
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="featureCount">-</div>
+                            <div class="model-stat-label">Features</div>
+                        </div>
+                        <div class="model-stat">
+                            <div class="model-stat-value" id="testSamples">-</div>
+                            <div class="model-stat-label">Test Samples</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabbed Content -->
+                <div class="tabs">
+                    <button class="tab active" onclick="showTab('metrics')">Performance Metrics</button>
+                    <button class="tab" onclick="showTab('capabilities')">Model Capabilities</button>
+                    <button class="tab" onclick="showTab('parameters')">Model Parameters</button>
+                    <button class="tab" onclick="showTab('visualizations')">Visualizations</button>
+                    <button class="tab" onclick="showTab('details')">Technical Details</button>
+                </div>
+
+                <!-- Metrics Tab -->
+                <div class="tab-content active" id="metricsTab">
+                    <div class="metrics-grid" id="metricsGrid">
+                        <!-- Metrics will be populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Capabilities Tab -->
+                <div class="tab-content" id="capabilitiesTab">
+                    <div class="info-grid" id="capabilitiesGrid">
+                        <!-- Capabilities will be populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Parameters Tab -->
+                <div class="tab-content" id="parametersTab">
+                    <div class="table-container" id="modelParams" style="display: none;">
+                        <div class="table-header">Model Parameters</div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Value</th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="paramsTableBody">
+                                <!-- Parameters will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Visualizations Tab -->
+                <div class="tab-content" id="visualizationsTab">
+                    <div class="visualization-grid" id="visualizationGrid">
+                        <!-- Plots will be populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Technical Details Tab -->
+                <div class="tab-content" id="detailsTab">
+                    <div class="model-details">
+                        <div class="detail-card">
+                            <h4>Model Information</h4>
+                            <ul class="detail-list" id="modelInfoList">
+                                <!-- Model info will be populated -->
+                            </ul>
+                        </div>
+                        <div class="detail-card">
+                            <h4>Evaluation Details</h4>
+                            <ul class="detail-list" id="evaluationDetailsList">
+                                <!-- Evaluation details will be populated -->
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- MLflow Integration -->
+                    <div class="table-container" id="mlflowInfo" style="display: none;">
+                        <div class="table-header">MLflow Experiment Tracking</div>
+                        <table>
+                            <tbody>
+                                <tr>
+                                    <th>Run ID</th>
+                                    <td id="mlflowRunId">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Experiment</th>
+                                    <td id="mlflowExperiment">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <td id="evaluationTimestamp">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Model Path</th>
+                                    <td id="modelPath">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Dataset Path</th>
+                                    <td id="datasetPath">-</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Download Section -->
+                <div class="download-section">
+                    <h4>Export Results</h4>
+                    <p>Download your analysis results in various formats</p>
+                    <div class="action-buttons">
+                        <button class="btn btn-info" onclick="downloadResults('json')">Download JSON</button>
+                        <button class="btn btn-info" onclick="downloadResults('csv')">Download CSV</button>
+                        
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="action-buttons">
+                    <button class="btn btn-warning" onclick="runNewAnalysis()">Run New Analysis</button>                    
+                </div>
+            </div>
+
+            <!-- Error Section -->
+            <div class="error-message" id="errorSection" style="display: none;">
+                <h3>Analysis Error</h3>
+                <p id="errorMessage">An error occurred during analysis.</p>
+                <div class="action-buttons" style="margin-top: 20px;">
+                    <button class="btn btn-warning" onclick="runNewAnalysis()">Try Again</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let evaluationInterval;
+        let currentModelName = '{{ model_name }}';
+        let currentResults = null;
+
+        // Tab management
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            document.getElementById(tabName + 'Tab').classList.add('active');
+            
+            // Add active class to selected tab
+            event.target.classList.add('active');
+        }
+
+        // Progress tracking
+        function updateProgress(progress) {
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const progressPercentage = document.getElementById('progressPercentage');
+            
+            progressFill.style.width = progress.progress_percent + '%';
+            progressText.textContent = progress.current_task;
+            progressPercentage.textContent = progress.progress_percent + '%';
+            
+            if (progress.progress_percent >= 100) {
+                document.getElementById('loadingSpinner').style.display = 'none';
+                setTimeout(() => {
+                    loadResults();
+                }, 1000);
+            }
+        }
+
+        // Load evaluation results
+        function loadResults() {
+            fetch(`/api/ml_results/${currentModelName}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                        showError(data.error);
+                        return;
+                    }
+                    
+                    currentResults = data;
+                    displayResults(data);
+                    document.getElementById('progressSection').style.display = 'none';
+                    document.getElementById('resultsSection').classList.add('show');
+                })
+                .catch(error => {
+                    console.error('Load results error:', error);
+                    showError('Failed to load results: ' + error.message);
+                });
+        }
+
+        // Display evaluation results
+        function displayResults(results) {
+            // Model Summary
+            if (results.model_info) {
+                document.getElementById('modelType').textContent = results.model_info.model_type;
+                document.getElementById('problemType').textContent = results.problem_type.charAt(0).toUpperCase() + results.problem_type.slice(1);
+                document.getElementById('featureCount').textContent = results.model_info.feature_count || 'Unknown';
+                document.getElementById('testSamples').textContent = results.num_test_samples || 'Unknown';
+                document.getElementById('modelSummary').style.display = 'block';
+            }
+
+            // Display metrics
+            if (results.metrics) {
+                displayMetrics(results.metrics, results.problem_type);
+            }
+
+            // Model Capabilities
+            displayCapabilities(results.model_info);
+
+            // Model Parameters
+            if (results.model_info && results.model_info.model_params) {
+                displayModelParameters(results.model_info.model_params);
+            }
+
+            // Visualizations
+            if (results.plots) {
+                displayVisualizations(results.plots);
+            }
+
+            // Technical Details
+            displayTechnicalDetails(results);
+
+            // MLflow Info
+            if (results.mlflow_run_id) {
+                document.getElementById('mlflowRunId').textContent = results.mlflow_run_id;
+                document.getElementById('mlflowExperiment').textContent = `ML_Evaluation_${currentModelName}`;
+                document.getElementById('evaluationTimestamp').textContent = new Date(results.timestamp).toLocaleString();
+                document.getElementById('modelPath').textContent = results.model_path;
+                document.getElementById('datasetPath').textContent = results.dataset_path;
+                document.getElementById('mlflowInfo').style.display = 'block';
+            }
+        }
+
+        // Display performance metrics
+        function displayMetrics(metrics, problemType) {
+            const metricsGrid = document.getElementById('metricsGrid');
+            metricsGrid.innerHTML = '';
+
+            // Define key metrics based on problem type
+            let keyMetrics = [];
+            if (problemType === 'regression') {
+                keyMetrics = [
+                    { key: 'r2', label: 'R² Score', description: 'Coefficient of determination' },
+                    { key: 'mae', label: 'Mean Absolute Error', description: 'Average absolute difference' },
+                    { key: 'rmse', label: 'Root Mean Square Error', description: 'Square root of MSE' },
+                    { key: 'mape', label: 'Mean Absolute Percentage Error', description: 'Percentage error' },
+                    { key: 'max_error', label: 'Max Error', description: 'Maximum prediction error' },
+                    { key: 'explained_variance', label: 'Explained Variance', description: 'Variance explained by model' }
+                ];
+            } else {
+                keyMetrics = [
+                    { key: 'accuracy', label: 'Accuracy', description: 'Overall prediction accuracy' },
+                    { key: 'precision_weighted', label: 'Precision (Weighted)', description: 'Weighted precision score' },
+                    { key: 'recall_weighted', label: 'Recall (Weighted)', description: 'Weighted recall score' },
+                    { key: 'f1_weighted', label: 'F1 Score (Weighted)', description: 'Weighted F1 score' },
+                    { key: 'roc_auc', label: 'ROC AUC', description: 'Area under ROC curve' },
+                    { key: 'specificity', label: 'Specificity', description: 'True negative rate' }
+                ];
+            }
+
+            keyMetrics.forEach(metric => {
+                if (metrics[metric.key] !== undefined && metrics[metric.key] !== null) {
+                    const card = createMetricCard(metric.label, metrics[metric.key], metric.description);
+                    metricsGrid.appendChild(card);
+                }
+            });
+        }
+
+        // Create metric card
+        function createMetricCard(label, value, description) {
+            const card = document.createElement('div');
+            card.className = 'metric-card';
+            
+            const formattedValue = typeof value === 'number' ? value.toFixed(4) : value;
+            
+            card.innerHTML = `
+                <div class="metric-value">${formattedValue}</div>
+                <div class="metric-label">${label}</div>
+                <div class="metric-description">${description}</div>
+            `;
+            return card;
+        }
+
+        // Display model capabilities
+        function displayCapabilities(modelInfo) {
+            const capabilitiesGrid = document.getElementById('capabilitiesGrid');
+            capabilitiesGrid.innerHTML = '';
+
+            // Defensive: If modelInfo is missing, show a message and return
+            if (!modelInfo) {
+                const card = document.createElement('div');
+                card.className = 'info-card';
+                card.innerHTML = `
+                    <h3>Model Info Not Available</h3>
+                    <div class="info-value">No model information found</div>
+                `;
+                capabilitiesGrid.appendChild(card);
+                return;
+            }
+
+            const capabilities = [
+                { 
+                    name: 'Feature Importance', 
+                    value: modelInfo.has_feature_importance ? 'Available' : 'Not Available', 
+                    description: 'Can provide feature importance scores',
+                    status: modelInfo.has_feature_importance || false
+                },
+                { 
+                    name: 'Predict Probabilities', 
+                    value: modelInfo.has_predict_proba ? 'Available' : 'Not Available', 
+                    description: 'Can output prediction probabilities',
+                    status: modelInfo.has_predict_proba || false
+                },
+                { 
+                    name: 'Linear Coefficients', 
+                    value: modelInfo.has_coefficients ? 'Available' : 'Not Available', 
+                    description: 'Has interpretable linear coefficients',
+                    status: modelInfo.has_coefficients || false
+                },
+                { 
+                    name: 'Training Score', 
+                    value: modelInfo.training_score ? modelInfo.training_score.toFixed(4) : 'Not Available', 
+                    description: 'Model training performance score',
+                    status: modelInfo.training_score !== null
+                }
+            ];
+
+            capabilities.forEach(capability => {
+                const card = createCapabilityCard(capability.name, capability.value, capability.description, capability.status);
+                capabilitiesGrid.appendChild(card);
+            });
+            }
+
+        // Create capability card
+        function createCapabilityCard(title, value, description, status) {
+            const card = document.createElement('div');
+            card.className = 'info-card';
+            
+            const statusClass = status ? 'status-yes' : 'status-no';
+            
+            card.innerHTML = `
+                <h3><span class="status-indicator ${statusClass}"></span>${title}</h3>
+                <div class="info-value">${value}</div>
+                <div class="info-description">${description}</div>
+            `;
+            return card;
+        }
+
+        // Display model parameters in table
+        function displayModelParameters(params) {
+            const paramsTableBody = document.getElementById('paramsTableBody');
+            paramsTableBody.innerHTML = '';
+            
+            Object.entries(params).forEach(([key, value]) => {
+                const row = document.createElement('tr');
+                const valueType = typeof value;
+                const displayValue = valueType === 'object' ? JSON.stringify(value) : String(value);
+                
+                row.innerHTML = `
+                    <td>${key}</td>
+                    <td>${displayValue}</td>
+                    <td>${valueType}</td>
+                `;
+                paramsTableBody.appendChild(row);
+            });
+            document.getElementById('modelParams').style.display = 'block';
+        }
+
+        // Display visualizations
+        function displayVisualizations(plots) {
+            const vizGrid = document.getElementById('visualizationGrid');
+            vizGrid.innerHTML = '';
+            
+            Object.entries(plots).forEach(([plotName, plotPath]) => {
+                const card = document.createElement('div');
+                card.className = 'viz-card';
+                
+                const formattedName = plotName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                
+                card.innerHTML = `
+                    <div class="viz-header">${formattedName}</div>
+                    <div class="viz-content">
+                        <img src="/static/${plotPath}" alt="${plotName}" onclick="openImageModal('/${plotPath}', '${formattedName}')
+                        ">
+                        <div class="viz-actions">
+                            <button onclick="downloadImage('/${plotPath}', '${formattedName}')">Download</button>
+                        </div>
+                    </div>
+                `;
+                vizGrid.appendChild(card);
+            });
+        }
+
+        // Display technical details
+        function displayTechnicalDetails(results) {
+            const modelInfoList = document.getElementById('modelInfoList');
+            const evaluationDetailsList = document.getElementById('evaluationDetailsList');
+            
+            modelInfoList.innerHTML = '';
+            evaluationDetailsList.innerHTML = '';
+            
+            // Model Information
+            if (results.model_info) {
+                const modelInfo = results.model_info;
+                const infoItems = [
+                    { label: 'Model Type', value: modelInfo.model_type },
+                    { label: 'Feature Count', value: modelInfo.feature_count || 'Unknown' },
+                    { label: 'Has Feature Importance', value: modelInfo.has_feature_importance ? 'Yes' : 'No' },
+                    { label: 'Has Predict Probabilities', value: modelInfo.has_predict_proba ? 'Yes' : 'No' },
+                    { label: 'Has Coefficients', value: modelInfo.has_coefficients ? 'Yes' : 'No' },
+                    { label: 'Training Score', value: modelInfo.training_score ? modelInfo.training_score.toFixed(4) : 'Not Available' }
+                ];
+                
+                infoItems.forEach(item => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>${item.label}:</strong> ${item.value}`;
+                    modelInfoList.appendChild(li);
+                });
+            }
+            
+            // Evaluation Details
+            const evaluationDetails = [
+                { label: 'Problem Type', value: results.problem_type },
+                { label: 'Test Samples', value: results.num_test_samples },
+                { label: 'Number of Features', value: results.num_features },
+                { label: 'Evaluation Timestamp', value: new Date(results.timestamp).toLocaleString() },
+                { label: 'Plots Generated', value: Object.keys(results.plots || {}).length }
+            ];
+            
+            evaluationDetails.forEach(item => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${item.label}:</strong> ${item.value}`;
+                evaluationDetailsList.appendChild(li);
+            });
+        }
+
+        // Image modal functions
+        function openImageModal(imageSrc, imageTitle) {
+            // Create modal if it doesn't exist
+            let modal = document.getElementById('imageModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'imageModal';
+                modal.className = 'image-modal';
+                modal.innerHTML = `
+                    <div class="modal-content">
+                        <span class="close-modal" onclick="closeImageModal()">&times;</span>
+                        <img id="modalImage" src="" alt="">
+                        <div id="modalTitle"></div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            
+            document.getElementById('modalImage').src = imageSrc;
+            document.getElementById('modalTitle').textContent = imageTitle;
+            modal.style.display = 'block';
+        }
+
+        function closeImageModal() {
+            const modal = document.getElementById('imageModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Download functions
+        function downloadImage(imageSrc, imageName) {
+            const link = document.createElement('a');
+            link.href = imageSrc;
+            link.download = `${imageName.replace(/\s+/g, '_')}.png`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function downloadResults(format) {
+            if (!currentResults) {
+                alert('No results available to download');
+                return;
+            }
+            
+            const endpoint = format === 'json' ? 
+                `/api/export_results/${currentModelName}/json` : 
+                `/api/export_results/${currentModelName}/csv`;
+            
+            fetch(endpoint)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Download failed');
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `ml_evaluation_${currentModelName}_${new Date().toISOString().slice(0, 10)}.${format}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(url);
+                })
+                .catch(error => {
+                    console.error('Download error:', error);
+                    alert('Download failed. Please try again.');
+                });
+        }
+
+        function viewMLflowUI() {
+            if (currentResults && currentResults.mlflow_run_id) {
+                const mlflowUrl = `http://localhost:5000/#/experiments/1/runs/${currentResults.mlflow_run_id}`;
+                window.open(mlflowUrl, '_blank');
+            } else {
+                alert('MLflow information not available');
+            }
+        }
+
+        // Action functions
+        function runNewAnalysis() {
+            if (!confirm('This will start a new analysis. Continue?')) return;
+
+            // Optionally, get subcategory and benchmark if needed
+            const subcategory = 'supervised'; // or get from page context
+            const benchmark = 'MLflow'; // or get from page context
+
+            fetch(`/api/start_evaluation/${currentModelName}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subcategory: subcategory, benchmark: benchmark })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'started') {
+                    // Reset UI and start polling for progress
+                    currentResults = null;
+                    document.getElementById('resultsSection').classList.remove('show');
+                    document.getElementById('progressSection').style.display = 'block';
+                    document.getElementById('errorSection').style.display = 'none';
+                    updateProgress({ progress_percent: 0, current_task: 'Initializing new analysis...' });
+                    document.getElementById('loadingSpinner').style.display = 'block';
+                    startEvaluation();
+                } else {
+                    alert(data.error || 'Failed to start new analysis.');
+                }
+            })
+            .catch(error => {
+                alert('Failed to start new analysis: ' + error.message);
+            });
+        }
+
+        function compareModels() {
+            // This would typically open a model comparison interface
+            fetch('/api/available_models')
+                .then(response => response.json())
+                .then(models => {
+                    if (models.length > 1) {
+                        const comparisonUrl = `/comparison?models=${models.join(',')}`;
+                        window.open(comparisonUrl, '_blank');
+                    } else {
+                        alert('Need at least 2 models to compare');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching available models:', error);
+                    alert('Could not load available models for comparison');
+                });
+        }
+
+        // Error handling
+        function showError(errorMessage) {
+            document.getElementById('progressSection').style.display = 'none';
+            document.getElementById('resultsSection').classList.remove('show');
+            document.getElementById('errorMessage').textContent = errorMessage;
+            document.getElementById('errorSection').style.display = 'block';
+        }
+
+        // Start evaluation process
+        function startEvaluation() {
+            // Start polling for progress
+            evaluationInterval = setInterval(() => {
+                fetch(`/api/ml_progress/${currentModelName}`)
+                    .then(response => response.json())
+                    .then(progress => {
+                        updateProgress(progress);
+                    })
+                    .catch(error => {
+                        console.error('Progress polling error:', error);
+                        clearInterval(evaluationInterval);
+                        showError('Failed to track evaluation progress');
+                    });
+            }, 1000);
+
+            // Start the actual evaluation
+            fetch(`/api/start_evaluation/${currentModelName}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    clearInterval(evaluationInterval);
+                    showError(data.error);
+                }
+            })
+            .catch(error => {
+                clearInterval(evaluationInterval);
+                showError('Failed to start evaluation: ' + error.message);
+            });
+        }
+
+        // Initialize the page
+        function initializePage() {
+            // Check if evaluation should start automatically
+            const urlParams = new URLSearchParams(window.location.search);
+            const autoStart = urlParams.get('autostart');
+            
+            if (autoStart === 'true') {
+                startEvaluation();
+            } else {
+                // Check if results already exist
+                loadResults();
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(event) {
+            // Close modal with Escape key
+            if (event.key === 'Escape') {
+                closeImageModal();
+            }
+            
+            // Tab navigation with number keys
+            if (event.key >= '1' && event.key <= '5') {
+                const tabs = ['metrics', 'capabilities', 'parameters', 'visualizations', 'details'];
+                const tabIndex = parseInt(event.key) - 1;
+                if (tabIndex < tabs.length) {
+                    showTab(tabs[tabIndex]);
+                }
+            }
+        });
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initializePage);
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (evaluationInterval) {
+                clearInterval(evaluationInterval);
+            }
+        });
+
+        // Auto-refresh results every 30 seconds if no active evaluation
+        setInterval(() => {
+            if (!evaluationInterval && currentResults) {
+                fetch(`/api/ml_results/${currentModelName}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.timestamp !== currentResults.timestamp) {
+                            currentResults = data;
+                            displayResults(data);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Auto-refresh error:', error);
+                    });
+            }
+        }, 30000);
+    </script>
+    
+</body>
+</html>

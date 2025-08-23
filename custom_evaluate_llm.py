@@ -45,6 +45,9 @@ CHROMA_DB_PATH = "./chroma_db"
 progress_tracker = {}
 progress_lock = threading.Lock()
 
+#Initialize Ollama client
+cli = ollama_client(host='http://10.177.213.115.11434')
+
 def update_progress(model_name, stage, message):
     """Update progress for a specific model evaluation."""
     with progress_lock:

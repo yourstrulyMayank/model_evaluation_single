@@ -8,10 +8,10 @@ from typing import Dict, List, Any, Tuple
 from collections import defaultdict
 import threading
 import torch
-import seqio
+# import seqio
 import numpy as np
 from datasets import disable_caching
-from bigbench.bbseqio import tasks, vocabs
+# from bigbench.bbseqio import tasks, vocabs
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,

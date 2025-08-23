@@ -183,6 +183,7 @@
                 <select id="benchmark-llm-1" class="apple-dropdown">
                     <option value="Wealth Advisory Model" selected>Wealth Advisory Model</option>
                     <option value="Compliance Model">Compliance Model</option>
+                    <option value="Capital Risk Model">Capital Risk Model</option>
                 </select>
                 <br>
                 
@@ -207,6 +208,17 @@
             document.getElementById('benchmark-input-llm-1').value = selectedModel;
 
             let form, route;
+            if (selectedModel === "Capital Risk Model") {
+            if (type === 'standard') {
+                form = document.getElementById('standard-eval-form');
+                route = "{{ url_for('ml_s_t_mlflow.evaluate_ml', model_name='capital_risk', subcategory='supervised') }}";
+                form.action = route;
+            } else {
+                form = document.getElementById('custom-eval-form');
+                route = "{{ url_for('ml_s_c.custom_ml', model_name='capital_risk', subcategory='supervised') }}";
+                form.action = route;
+            }
+        } else {
             if (type === 'standard') {
                 form = document.getElementById('standard-eval-form');
                 route = "{{ url_for('evaluate_llm', model_name='__MODEL__') }}";
@@ -217,6 +229,8 @@
                 form.action = route.replace('__MODEL__', encodeURIComponent(selectedModel));
             }
         }
+        form.submit();
+    }
     </script>
 </body>
 </html>
